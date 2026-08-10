@@ -695,6 +695,50 @@ mod test {
         );
     }
 
+    /// A live pool from the toxic campaign: its rate providers answer a quote and a swap
+    /// differently, so what we read has to match the swap. Pinned to a block where the providers
+    /// were armed; `quote_like` is what this code read before the fix.
+    #[test]
+    #[ignore = "Requires RPC_URL to be set in environment variables or .env file"]
+    fn stored_rates_on_a_toxic_pool_match_the_swap() {
+        let pool = address!("509c6c89fbf48b968b52c8069607c729464c78b6");
+        let mut db = SimulationDB::new(get_client(None).unwrap(), get_runtime().unwrap(), None);
+        db.set_block(Some(BlockHeader {
+            number: 25_723_040,
+            timestamp: 1_786_346_171,
+            ..Default::default()
+        }));
+        let engine = create_engine(db, false).unwrap();
+
+        let read = read_stored_rates(&engine, &pool, 2).expect("rates must decode");
+        let quote_like = engine
+            .simulate(&params(pool, STORED_RATES_SELECTOR.to_vec()))
+            .map(|res| {
+                let out = res.result.to_vec();
+                (0..2)
+                    .map(|i| U256::from_be_slice(&out[i * 32..(i + 1) * 32]))
+                    .collect::<Vec<_>>()
+            })
+            .expect("quote-like read must succeed");
+
+        // What a swap gets, captured on-chain at the pinned block.
+        assert_eq!(
+            read,
+            vec![
+                Some(U256::from(999_900_210_000_000_000_000_000_000_000u128)),
+                Some(U256::from(999_274_730_000_000_000_000_000_000_000u128)),
+            ],
+        );
+        assert_ne!(
+            read.iter()
+                .map(|rate| rate.unwrap())
+                .collect::<Vec<_>>(),
+            quote_like,
+            "the pool served the same rates to both contexts: it is no longer armed, so this test \
+             cannot prove anything"
+        );
+    }
+
     /// Every read other than the rate providers keeps the previous context, so the change stays
     /// confined to the one call that reaches attacker-supplied code.
     #[test]
