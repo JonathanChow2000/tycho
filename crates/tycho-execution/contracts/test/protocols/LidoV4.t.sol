@@ -13,6 +13,14 @@ import {
 } from "../../src/executors/LidoV4Executor.sol";
 import {TestUtils} from "../TestUtils.sol";
 
+/// Only the rate view the tests need; the executor itself never reads it.
+interface IWstETHRate {
+    function getWstETHByStETH(uint256 stETHAmount)
+        external
+        view
+        returns (uint256);
+}
+
 contract LidoV4ExecutorExposed is LidoV4Executor {
     constructor(address stEthAddress, address wstEthAddress)
         LidoV4Executor(stEthAddress, wstEthAddress)
@@ -88,7 +96,8 @@ contract LidoV4ExecutorTest is TestUtils, Constants {
     }
 
     function testDecodeParamsInvalidDirection() public {
-        bytes memory invalidParams = abi.encodePacked(uint8(3));
+        // One past the last variant, EthToWstEth.
+        bytes memory invalidParams = abi.encodePacked(uint8(4));
 
         vm.expectRevert(LidoV4Executor__InvalidDirection.selector);
         lidoV4Executor.decodeParams(invalidParams);
@@ -158,6 +167,60 @@ contract LidoV4ExecutorTest is TestUtils, Constants {
         assertEq(tokenIn, WSTETH_ADDR);
         assertEq(tokenOut, STETH_ADDR);
         assertEq(outputToRouter, true);
+    }
+
+    function testGetTransferDataSubmitAndWrap() public {
+        bytes memory params =
+            abi.encodePacked(uint8(LidoV4Direction.EthToWstEth));
+
+        (
+            TransferManager.TransferType transferType,
+            address receiver,
+            address tokenIn,
+            address tokenOut,
+            bool outputToRouter
+        ) = lidoV4Executor.getTransferData(params);
+
+        assertEq(
+            uint8(transferType),
+            uint8(TransferManager.TransferType.TransferNativeInExecutor)
+        );
+        assertEq(receiver, address(this));
+        assertEq(tokenIn, ETH_ADDRESS);
+        assertEq(tokenOut, WSTETH_ADDR);
+        assertEq(outputToRouter, true);
+    }
+
+    function testSwapSubmitAndWrap() public {
+        uint256 amountIn = 1 ether;
+        bytes memory protocolData =
+            abi.encodePacked(uint8(LidoV4Direction.EthToWstEth));
+
+        vm.deal(address(this), amountIn);
+        uint256 balanceBefore =
+            IERC20(WSTETH_ADDR).balanceOf(address(lidoV4Executor));
+
+        lidoV4Executor.swap{value: amountIn}(amountIn, protocolData, BOB);
+
+        uint256 balanceAfter =
+            IERC20(WSTETH_ADDR).balanceOf(address(lidoV4Executor));
+        assertGt(balanceAfter, balanceBefore);
+    }
+
+    /// The shortcut has to mint what `wrap` would, so a router is never worse off taking it.
+    function testSwapSubmitAndWrapMatchesSubmitThenWrap() public {
+        uint256 amountIn = 1 ether;
+
+        uint256 expected = IWstETHRate(WSTETH_ADDR).getWstETHByStETH(amountIn);
+
+        vm.deal(address(this), amountIn);
+        lidoV4Executor.swap{value: amountIn}(
+            amountIn, abi.encodePacked(uint8(LidoV4Direction.EthToWstEth)), BOB
+        );
+
+        assertApproxEqAbs(
+            IERC20(WSTETH_ADDR).balanceOf(address(lidoV4Executor)), expected, 2
+        );
     }
 
     function testSwapSubmit() public {
@@ -290,6 +353,27 @@ contract TychoRouterForLidoV4Test is TychoRouterTestSetup {
         assertGt(balanceAfter, balanceBefore);
         assertEq(IERC20(WSTETH_ADDR).balanceOf(tychoRouterAddr), 0);
         assertLe(stEth.balanceOf(tychoRouterAddr), 1);
+    }
+
+    function testSingleLidoV4SubmitAndWrapIntegration() public {
+        IERC20 wstEth = IERC20(WSTETH_ADDR);
+        uint256 amountIn = 1 ether;
+        bytes memory callData = loadCallDataFromFile(
+            "test_single_encoding_strategy_lido_v4_submit_and_wrap"
+        );
+
+        vm.deal(ALICE, amountIn);
+        vm.startPrank(ALICE);
+
+        uint256 balanceBefore = wstEth.balanceOf(ALICE);
+        (bool success,) = tychoRouterAddr.call{value: amountIn}(callData);
+        uint256 balanceAfter = wstEth.balanceOf(ALICE);
+
+        assertTrue(success, "Call Failed");
+        assertGt(balanceAfter, balanceBefore);
+        assertEq(wstEth.balanceOf(tychoRouterAddr), 0);
+        assertEq(tychoRouterAddr.balance, 0);
+        vm.stopPrank();
     }
 
     function testSequentialLidoV4SubmitThenWrapIntegration() public {

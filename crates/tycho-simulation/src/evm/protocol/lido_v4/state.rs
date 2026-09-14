@@ -34,6 +34,10 @@ pub const WSTETH_SHARES_ATTR: &str = "wsteth_shares";
 const UINT128_MAX_EXCLUSIVE: u128 = u128::MAX;
 
 const SUBMIT_GAS: u64 = 160_000;
+/// wstETH's `receive()` runs `stETH.submit` and mints the wrapper's shares in one call. Measured
+/// on mainnet at 101,826 against 86,779 for a bare `submit`, so the wrap adds ~15,000 on top of
+/// whatever the submit path costs.
+const SUBMIT_AND_WRAP_GAS: u64 = SUBMIT_GAS + 15_000;
 const WRAP_GAS: u64 = 81_000;
 const UNWRAP_GAS: u64 = 66_000;
 
@@ -214,8 +218,11 @@ impl LidoV4State {
 
         if base.address.as_ref() == WSTETH_ADDRESS && quote.address.as_ref() == STETH_ADDRESS {
             to_price(self.pooled_eth_by_shares(U256::from(10).pow(U256::from(base.decimals)))?)
-        } else if base.address.as_ref() == STETH_ADDRESS && quote.address.as_ref() == WSTETH_ADDRESS
+        } else if (base.address.as_ref() == STETH_ADDRESS || base.address.as_ref() == ETH_ADDRESS) &&
+            quote.address.as_ref() == WSTETH_ADDRESS
         {
+            // Submitting ETH mints shares worth the ETH, and wrapping stETH mints shares worth
+            // the stETH - the same conversion either way, since submit is at parity.
             to_price(self.shares_for_pooled_eth(U256::from(10).pow(U256::from(base.decimals)))?)
         } else {
             Err(SimulationError::FatalError("unsupported spot price".to_string()))
@@ -248,6 +255,26 @@ impl LidoV4State {
             u256_to_biguint(amount_out),
             BigUint::from(WRAP_GAS),
             self.clone_box(),
+        ))
+    }
+
+    /// ETH -> wstETH through the wrapper's `receive()`: it submits the ETH and mints exactly the
+    /// shares `submit` returned, so the output is the share count itself, not a stETH balance.
+    fn amount_out_eth_to_wsteth(
+        &self,
+        amount_in: U256,
+    ) -> Result<GetAmountOutResult, SimulationError> {
+        let shares_amount = self.shares_for_pooled_eth(amount_in)?;
+        let mut new_state = self.clone();
+        new_state.decrease_staking_limit(amount_in)?;
+        new_state.total_shares += shares_amount;
+        new_state.buffered_ether += amount_in;
+        // The submitted stETH lands on the wrapper, so its share balance grows with the mint.
+        new_state.wsteth_shares = Some(new_state.wsteth_shares()? + shares_amount);
+        Ok(GetAmountOutResult::new(
+            u256_to_biguint(shares_amount),
+            BigUint::from(SUBMIT_AND_WRAP_GAS),
+            Box::new(new_state),
         ))
     }
 
@@ -379,6 +406,12 @@ impl ProtocolSim for LidoV4State {
             {
                 self.amount_out_wsteth_to_steth(amount_in)
             }
+            LidoV4PoolKind::WstEth
+                if token_in.address.as_ref() == ETH_ADDRESS &&
+                    token_out.address.as_ref() == WSTETH_ADDRESS =>
+            {
+                self.amount_out_eth_to_wsteth(amount_in)
+            }
             _ => Err(SimulationError::FatalError("unsupported swap".to_string())),
         }
     }
@@ -432,9 +465,27 @@ impl ProtocolSim for LidoV4State {
                     u256_to_biguint(self.pooled_eth_by_shares(max_sell)?),
                 ))
             }
+            LidoV4PoolKind::WstEth
+                if sell_token.as_ref() == ETH_ADDRESS && buy_token.as_ref() == WSTETH_ADDRESS =>
+            {
+                // `receive()` stakes through `stETH.submit`, so the stake limit bounds it exactly
+                // as it bounds ETH -> stETH.
+                let max_sell = self
+                    .staking_state()?
+                    .current_limit(self.block_number)
+                    .min(max_input);
+                if max_sell.is_zero() {
+                    return Ok((BigUint::ZERO, BigUint::ZERO));
+                }
+                let max_buy = self
+                    .amount_out_eth_to_wsteth(max_sell)?
+                    .amount;
+                Ok((u256_to_biguint(max_sell), max_buy))
+            }
             // Staking is one-directional: unstaking goes through the asynchronous withdrawal
-            // queue, so stETH -> ETH has no quote. Report a zero limit rather than an error so
-            // callers skip the direction instead of treating the component as broken.
+            // queue, so stETH -> ETH and wstETH -> ETH have no quote. Report a zero limit rather
+            // than an error so callers skip the direction instead of treating the component as
+            // broken.
             _ => Ok((BigUint::ZERO, BigUint::ZERO)),
         }
     }
@@ -589,7 +640,6 @@ mod tests {
     fn sample_wsteth_state() -> LidoV4State {
         let mut state = sample_steth_state();
         state.kind = LidoV4PoolKind::WstEth;
-        state.staking_state = None;
         state.wsteth_shares = Some(sample_wsteth_shares());
         state
     }
@@ -631,14 +681,12 @@ mod tests {
                 Bytes::from(sample_wsteth_shares().to_be_bytes_vec()),
             );
         }
+        attributes.insert(
+            STAKING_STATE_ATTR.to_string(),
+            Bytes::from(staking_state_raw(sample_staking_state()).to_be_bytes_vec()),
+        );
         let component_id = match kind {
-            LidoV4PoolKind::StEth => {
-                attributes.insert(
-                    STAKING_STATE_ATTR.to_string(),
-                    Bytes::from(staking_state_raw(sample_staking_state()).to_be_bytes_vec()),
-                );
-                STETH_COMPONENT_ID.to_string()
-            }
+            LidoV4PoolKind::StEth => STETH_COMPONENT_ID.to_string(),
             LidoV4PoolKind::WstEth => WSTETH_COMPONENT_ID.to_string(),
         };
 
@@ -701,7 +749,8 @@ mod tests {
                 .unwrap();
 
         assert_eq!(state.kind, LidoV4PoolKind::WstEth);
-        assert!(state.staking_state.is_none());
+        // The wrapper stakes too, so it carries the stake limit.
+        assert!(state.staking_state.is_some());
         assert_eq!(state.buffered_ether, sample_steth_state().buffered_ether);
     }
 
@@ -986,6 +1035,160 @@ mod tests {
         assert_eq!(state.staking_state, Some(new_staking_state));
     }
 
+    #[test]
+    fn unwrap_quote_is_bounded_by_wrapper_shares() {
+        let state = sample_wsteth_state();
+        let (max_in, _) = state
+            .get_limits(Bytes::from(WSTETH_ADDRESS), Bytes::from(STETH_ADDRESS))
+            .expect("limits");
+
+        // At the limit it quotes ...
+        assert!(state
+            .get_amount_out(max_in.clone(), &wsteth_token(), &steth_token())
+            .is_ok());
+        // ... and one wei past it, it refuses rather than quoting a trade the wrapper cannot
+        // settle. `get_limits` and `get_amount_out` have to agree on the same bound.
+        let err = state
+            .get_amount_out(max_in + BigUint::from(1u64), &wsteth_token(), &steth_token())
+            .unwrap_err();
+        assert!(
+            matches!(err, SimulationError::RecoverableError(ref m) if m == "WRAPPER_BALANCE_EXCEEDED")
+        );
+    }
+
+    #[test]
+    fn eth_to_wsteth_mints_the_submitted_shares() {
+        let state = sample_wsteth_state();
+        let amount_in = BigUint::from(10u64).pow(18);
+
+        let result = state
+            .get_amount_out(amount_in.clone(), &eth_token(), &wsteth_token())
+            .expect("quote");
+
+        // `receive()` mints exactly the shares `submit` returned.
+        let expected = state
+            .shares_for_pooled_eth(biguint_to_u256(&amount_in))
+            .unwrap();
+        assert_eq!(result.amount, u256_to_biguint(expected));
+
+        let new_state = result
+            .new_state
+            .as_any()
+            .downcast_ref::<LidoV4State>()
+            .unwrap();
+        // The submitted ETH is buffered, the shares are minted, and they land on the wrapper.
+        assert_eq!(new_state.buffered_ether, state.buffered_ether + biguint_to_u256(&amount_in));
+        assert_eq!(new_state.total_shares, state.total_shares + expected);
+        assert_eq!(new_state.wsteth_shares, Some(state.wsteth_shares().unwrap() + expected));
+    }
+
+    #[test]
+    fn eth_to_wsteth_is_bounded_by_the_stake_limit() {
+        let state = sample_wsteth_state();
+
+        let (max_in, max_out) = state
+            .get_limits(Bytes::from(ETH_ADDRESS), Bytes::from(WSTETH_ADDRESS))
+            .expect("limits");
+
+        assert_eq!(
+            max_in,
+            u256_to_biguint(
+                state
+                    .staking_state
+                    .unwrap()
+                    .current_limit(state.block_number)
+            )
+        );
+        assert!(max_out > BigUint::ZERO);
+    }
+
+    #[test]
+    fn eth_to_wsteth_beats_routing_through_steth() {
+        let state = sample_wsteth_state();
+        let amount_in = BigUint::from(10u64).pow(18);
+
+        let direct = state
+            .get_amount_out(amount_in.clone(), &eth_token(), &wsteth_token())
+            .expect("direct");
+        // The two-hop route: submit on the stETH component, then wrap on this one.
+        let submitted = sample_steth_state()
+            .get_amount_out(amount_in, &eth_token(), &steth_token())
+            .expect("submit");
+        let wrapped = state
+            .get_amount_out(submitted.amount, &steth_token(), &wsteth_token())
+            .expect("wrap");
+
+        assert!(direct.amount >= wrapped.amount, "shortcut must not quote worse");
+        assert!(direct.gas < submitted.gas + wrapped.gas, "shortcut must be cheaper");
+    }
+
+    /// The wrapper's component carries three tokens, so a caller can ask for any of six
+    /// orderings. Only the three the wstETH contract performs may quote; the rest have to report
+    /// a zero limit and refuse to price or swap, in every method, or a router builds a leg that
+    /// cannot settle.
+    #[test]
+    fn wsteth_component_serves_only_its_three_operations() {
+        let state = sample_wsteth_state();
+        let amount = BigUint::from(10u64).pow(18);
+
+        let tradable = [
+            (steth_token(), wsteth_token()),
+            (wsteth_token(), steth_token()),
+            (eth_token(), wsteth_token()),
+        ];
+        // Unstaking runs through the withdrawal queue, and ETH -> stETH belongs to the stETH
+        // component, not the wrapper.
+        let untradable = [
+            (wsteth_token(), eth_token()),
+            (steth_token(), eth_token()),
+            (eth_token(), steth_token()),
+        ];
+
+        for (token_in, token_out) in &tradable {
+            let pair = format!("{} -> {}", token_in.symbol, token_out.symbol);
+            let (max_in, max_out) = state
+                .get_limits(token_in.address.clone(), token_out.address.clone())
+                .unwrap_or_else(|e| panic!("{pair} limits: {e:?}"));
+            assert!(max_in > BigUint::ZERO, "{pair} has no input capacity");
+            assert!(max_out > BigUint::ZERO, "{pair} has no output capacity");
+            assert!(
+                state
+                    .spot_price(token_in, token_out)
+                    .is_ok(),
+                "{pair} has no price"
+            );
+            assert!(
+                state
+                    .get_amount_out(amount.clone(), token_in, token_out)
+                    .is_ok(),
+                "{pair} does not quote"
+            );
+        }
+
+        for (token_in, token_out) in &untradable {
+            let pair = format!("{} -> {}", token_in.symbol, token_out.symbol);
+            assert_eq!(
+                state
+                    .get_limits(token_in.address.clone(), token_out.address.clone())
+                    .unwrap_or_else(|e| panic!("{pair} limits: {e:?}")),
+                (BigUint::ZERO, BigUint::ZERO),
+                "{pair} reports capacity it cannot settle"
+            );
+            assert!(
+                state
+                    .spot_price(token_in, token_out)
+                    .is_err(),
+                "{pair} has a price"
+            );
+            assert!(
+                state
+                    .get_amount_out(amount.clone(), token_in, token_out)
+                    .is_err(),
+                "{pair} quotes a swap the wrapper cannot perform"
+            );
+        }
+    }
+
     /// State read from stETH storage at the Lido v4 migration block 25603297. Pricing
     /// `sharesOf(wstETH)` at the share rate has to land on `stETH.balanceOf(wstETH)` from the
     /// same block, which pins the v4 pooled-ether formula to the chain.
@@ -1010,27 +1213,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(wsteth_backing, U256::from_str_radix("4499621841408863271318368", 10).unwrap());
-    }
-
-    #[test]
-    fn unwrap_quote_is_bounded_by_wrapper_shares() {
-        let state = sample_wsteth_state();
-        let (max_in, _) = state
-            .get_limits(Bytes::from(WSTETH_ADDRESS), Bytes::from(STETH_ADDRESS))
-            .expect("limits");
-
-        // At the limit it quotes ...
-        assert!(state
-            .get_amount_out(max_in.clone(), &wsteth_token(), &steth_token())
-            .is_ok());
-        // ... and one wei past it, it refuses rather than quoting a trade the wrapper cannot
-        // settle. `get_limits` and `get_amount_out` have to agree on the same bound.
-        let err = state
-            .get_amount_out(max_in + BigUint::from(1u64), &wsteth_token(), &steth_token())
-            .unwrap_err();
-        assert!(
-            matches!(err, SimulationError::RecoverableError(ref m) if m == "WRAPPER_BALANCE_EXCEEDED")
-        );
     }
 
     #[test]

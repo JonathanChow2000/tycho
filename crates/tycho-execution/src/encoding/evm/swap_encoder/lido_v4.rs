@@ -17,11 +17,13 @@ pub struct LidoV4SwapEncoder {
     native_token_address: Bytes,
 }
 
+/// Mirrors `LidoV4Direction` in LidoV4Executor.sol; the index is the whole calldata.
 #[repr(u8)]
 enum LidoV4Direction {
     Submit = 0,
     Wrap = 1,
     Unwrap = 2,
+    SubmitAndWrap = 3,
 }
 
 impl SwapEncoder for LidoV4SwapEncoder {
@@ -72,6 +74,11 @@ impl SwapEncoder for LidoV4SwapEncoder {
             *swap.token_out().address == self.steth_address
         {
             LidoV4Direction::Unwrap
+        } else if *swap.token_in().address == self.native_token_address &&
+            *swap.token_out().address == self.wsteth_address
+        {
+            // wstETH's receive() stakes and wraps in one call.
+            LidoV4Direction::SubmitAndWrap
         } else {
             return Err(EncodingError::InvalidInput("Combination not allowed".to_string()))
         };
@@ -199,6 +206,31 @@ mod tests {
 
         assert_eq!(hex_swap, "02");
         write_calldata_to_file("test_encode_lido_v4_unwrap", hex_swap.as_str());
+    }
+
+    #[test]
+    fn test_encode_lido_v4_submit_and_wrap() {
+        let component = ProtocolComponent {
+            id: WSTETH_ADDRESS.to_string(),
+            protocol_system: "lido_v4".to_string(),
+            ..Default::default()
+        };
+        let token_in = Bytes::from("0x0000000000000000000000000000000000000000");
+        let token_out = Bytes::from(WSTETH_ADDRESS);
+        let swap = Swap::new(
+            component,
+            default_token(token_in.clone()),
+            default_token(token_out.clone()),
+            BigUint::ZERO,
+        );
+
+        let encoded_swap = encoder()
+            .encode_swap(&swap, &encoding_context(&token_in, &token_out))
+            .unwrap();
+        let hex_swap = encode(&encoded_swap);
+
+        assert_eq!(hex_swap, "03");
+        write_calldata_to_file("test_encode_lido_v4_submit_and_wrap", hex_swap.as_str());
     }
 
     #[test]

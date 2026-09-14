@@ -49,6 +49,13 @@ impl InitialState {
             &bytes_from_hex(&self.wsteth_shares)?,
             ChangeType::Creation,
         ));
+        // ETH -> wstETH stakes through `stETH.submit`, so this component is bounded by the stake
+        // limit too.
+        attributes.push(attribute_with_bytes(
+            STAKING_STATE_ATTR,
+            &bytes_from_hex(&self.staking_state)?,
+            ChangeType::Creation,
+        ));
         Ok(attributes)
     }
 

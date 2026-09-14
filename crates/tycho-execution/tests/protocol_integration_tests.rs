@@ -2252,6 +2252,54 @@ fn test_single_encoding_strategy_lido_v4_submit() {
 }
 
 #[test]
+fn test_single_encoding_strategy_lido_v4_submit_and_wrap() {
+    // ETH -> (lido_v4) -> wstETH, through wstETH's receive() shortcut
+    let wsteth = Bytes::from("0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0");
+    let component = ProtocolComponent {
+        id: String::from("0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0"),
+        protocol_system: String::from("lido_v4"),
+        ..Default::default()
+    };
+    let swap =
+        Swap::new(component, default_token(eth()), default_token(wsteth.clone()), BigUint::ZERO);
+
+    let encoder = get_tycho_router_encoder(Chain::Ethereum);
+    let solution = Solution::new(
+        Bytes::from_str("0xcd09f75E2BF2A4d11F3AB23f1389FcC1621c0cc2").unwrap(),
+        Bytes::from_str("0xcd09f75E2BF2A4d11F3AB23f1389FcC1621c0cc2").unwrap(),
+        eth(),
+        wsteth.clone(),
+        BigUint::from_str("1_000000000000000000").unwrap(),
+        BigUint::from_str("800000000000000000").unwrap(),
+        BigUint::from_str("700000000000000000").unwrap(),
+        vec![swap],
+    );
+
+    let encoded_solution = encoder
+        .encode_solutions(vec![solution.clone()])
+        .unwrap()[0]
+        .clone();
+
+    let calldata = encode_tycho_router_call(
+        eth_chain().id(),
+        encoded_solution,
+        &solution,
+        &eth(),
+        None,
+        0,
+        Bytes::zero(20),
+        BigUint::ZERO,
+    )
+    .unwrap()
+    .data;
+    let hex_calldata = encode(&calldata);
+    write_calldata_to_file(
+        "test_single_encoding_strategy_lido_v4_submit_and_wrap",
+        hex_calldata.as_str(),
+    );
+}
+
+#[test]
 fn test_single_encoding_strategy_lido_v4_wrap() {
     // stETH -> (lido_v4) -> wstETH
     let steth = Bytes::from("0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84");

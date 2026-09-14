@@ -67,8 +67,10 @@ fn create_components() -> Vec<ProtocolComponent> {
             .with_tokens(&[STETH_ADDRESS, ETH_ADDRESS])
             .with_attributes(&[(TOKEN_TO_TRACK_TOTAL_POOLED_ETH_ATTR, ETH_ADDRESS.as_ref())])
             .as_swap_type("lido_v4_pool", ImplementationType::Custom),
+        // ETH is a token here because wstETH's `receive()` stakes and wraps in one call, so the
+        // wrapper quotes ETH -> wstETH as well as stETH <-> wstETH.
         ProtocolComponent::new(WSTETH_COMPONENT_ID)
-            .with_tokens(&[STETH_ADDRESS, WSTETH_ADDRESS])
+            .with_tokens(&[STETH_ADDRESS, WSTETH_ADDRESS, ETH_ADDRESS])
             .with_attributes(&[(TOKEN_TO_TRACK_TOTAL_POOLED_ETH_ATTR, STETH_ADDRESS.as_ref())])
             .as_swap_type("lido_v4_pool", ImplementationType::Custom),
     ]
@@ -248,7 +250,7 @@ fn handle_state_updates(
                     .entry(tx.index as u64)
                     .or_insert_with(|| TransactionChangesBuilder::new(&(tx.into())));
 
-                if target != AttributeTarget::WstEthOnly {
+                if target == AttributeTarget::Both {
                     builder.add_entity_change(&EntityChanges {
                         component_id: STETH_COMPONENT_ID.to_string(),
                         attributes: vec![attribute_with_bytes(
@@ -259,16 +261,15 @@ fn handle_state_updates(
                     });
                 }
 
-                if target != AttributeTarget::StEthOnly {
-                    builder.add_entity_change(&EntityChanges {
-                        component_id: WSTETH_COMPONENT_ID.to_string(),
-                        attributes: vec![attribute_with_bytes(
-                            attr_name,
-                            &storage_change.new_value,
-                            ChangeType::Update,
-                        )],
-                    });
-                }
+                // Every tracked slot describes the wrapper: it stakes, wraps and unwraps.
+                builder.add_entity_change(&EntityChanges {
+                    component_id: WSTETH_COMPONENT_ID.to_string(),
+                    attributes: vec![attribute_with_bytes(
+                        attr_name,
+                        &storage_change.new_value,
+                        ChangeType::Update,
+                    )],
+                });
 
                 if let Some(key) = balance_slot_key(&storage_change.key) {
                     let value = BigInt::from_unsigned_bytes_be(&storage_change.new_value);
@@ -358,12 +359,10 @@ fn decode_store_value(bytes: &[u8]) -> BigInt {
         .unwrap_or_else(BigInt::zero)
 }
 
-/// Which components an attribute belongs to. The share rate and the pooled-ether accounting drive
-/// both components; the stake limit only gates staking, and the wrapper's share balance only
-/// describes wstETH.
+/// Which components an attribute belongs to. The share rate, the pooled-ether accounting and the
+/// stake limit drive both components; only the wrapper's own share balance is specific to wstETH.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AttributeTarget {
-    StEthOnly,
     WstEthOnly,
     Both,
 }
@@ -377,7 +376,9 @@ fn tracked_attribute(slot: &[u8]) -> Option<(&'static str, AttributeTarget)> {
     } else if slot == CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_POSITION {
         Some((CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR, AttributeTarget::Both))
     } else if slot == STAKING_STATE_POSITION {
-        Some((STAKING_STATE_ATTR, AttributeTarget::StEthOnly))
+        // Both components stake: wstETH's `receive()` goes through `stETH.submit`, so the stake
+        // limit bounds ETH -> wstETH exactly as it bounds ETH -> stETH.
+        Some((STAKING_STATE_ATTR, AttributeTarget::Both))
     } else if slot == WSTETH_SHARES_POSITION {
         Some((WSTETH_SHARES_ATTR, AttributeTarget::WstEthOnly))
     } else {

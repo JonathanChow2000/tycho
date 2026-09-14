@@ -7,7 +7,10 @@ Indexes two components from raw stETH storage slots:
 
 - `stETH` (`0xae7a...fE84`) — ETH staking. One-directional: unstaking runs through the
   asynchronous withdrawal queue, so there is no stETH -> ETH quote.
-- `wstETH` (`0x7f39...2Ca0`) — stETH wrap and unwrap.
+- `wstETH` (`0x7f39...2Ca0`) — stETH wrap and unwrap, plus ETH -> wstETH: the wrapper's
+  `receive()` stakes through `stETH.submit` and mints the shares in one call, which saves the
+  hop through stETH. That direction is bounded by the same stake limit as a plain submit, so the
+  component tracks the stake limit too.
 
 Both contracts predate the package, so the module graph does not discover them from a creation
 event. The manifest carries a state snapshot in `params` and the components are created at

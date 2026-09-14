@@ -80,18 +80,17 @@ impl TryFromWithBlock<ComponentWithState, BlockHeader> for LidoV4State {
         let (cl_validators_balance, cl_pending_balance) =
             LidoV4State::split_low_high_u128(cl_balances);
 
-        let staking_state = match kind {
-            LidoV4PoolKind::StEth => Some(StakingState::from_u256(U256::from_be_slice(
-                snapshot
-                    .state
-                    .attributes
-                    .get(STAKING_STATE_ATTR)
-                    .ok_or_else(|| {
-                        InvalidSnapshotError::MissingAttribute(STAKING_STATE_ATTR.to_string())
-                    })?,
-            ))),
-            LidoV4PoolKind::WstEth => None,
-        };
+        // Both components stake: the wrapper's `receive()` goes through `stETH.submit`, so the
+        // stake limit bounds ETH -> wstETH as well as ETH -> stETH.
+        let staking_state = Some(StakingState::from_u256(U256::from_be_slice(
+            snapshot
+                .state
+                .attributes
+                .get(STAKING_STATE_ATTR)
+                .ok_or_else(|| {
+                    InvalidSnapshotError::MissingAttribute(STAKING_STATE_ATTR.to_string())
+                })?,
+        )));
 
         // Only the wstETH component tracks the wrapper's share balance; it bounds unwrapping.
         let wsteth_shares = match kind {
