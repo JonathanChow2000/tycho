@@ -255,6 +255,13 @@ impl LidoV4State {
         &self,
         amount_in: U256,
     ) -> Result<GetAmountOutResult, SimulationError> {
+        // Unwrapping pays out of the stETH the wrapper holds. Beyond that `wstETH.unwrap` reverts
+        // with a SafeMath underflow, and since the rate is linear nothing about a larger quote
+        // looks wrong - so reject it here rather than hand back a number that cannot settle.
+        // `get_limits` caps this direction at the same value.
+        if amount_in > self.wsteth_shares()? {
+            return Err(SimulationError::RecoverableError("WRAPPER_BALANCE_EXCEEDED".to_string()));
+        }
         let amount_out = self.pooled_eth_by_shares(amount_in)?;
         Ok(GetAmountOutResult::new(
             u256_to_biguint(amount_out),
@@ -1003,6 +1010,27 @@ mod tests {
             .unwrap();
 
         assert_eq!(wsteth_backing, U256::from_str_radix("4499621841408863271318368", 10).unwrap());
+    }
+
+    #[test]
+    fn unwrap_quote_is_bounded_by_wrapper_shares() {
+        let state = sample_wsteth_state();
+        let (max_in, _) = state
+            .get_limits(Bytes::from(WSTETH_ADDRESS), Bytes::from(STETH_ADDRESS))
+            .expect("limits");
+
+        // At the limit it quotes ...
+        assert!(state
+            .get_amount_out(max_in.clone(), &wsteth_token(), &steth_token())
+            .is_ok());
+        // ... and one wei past it, it refuses rather than quoting a trade the wrapper cannot
+        // settle. `get_limits` and `get_amount_out` have to agree on the same bound.
+        let err = state
+            .get_amount_out(max_in + BigUint::from(1u64), &wsteth_token(), &steth_token())
+            .unwrap_err();
+        assert!(
+            matches!(err, SimulationError::RecoverableError(ref m) if m == "WRAPPER_BALANCE_EXCEEDED")
+        );
     }
 
     #[test]
