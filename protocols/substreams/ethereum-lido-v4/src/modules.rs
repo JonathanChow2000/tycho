@@ -285,10 +285,12 @@ fn block_start_balance_state(
             .filter(|delta| delta.key == key)
             .min_by_key(|delta| delta.ordinal)
         {
-            Some(first_delta) => decode_store_value(&first_delta.old_value),
+            Some(first_delta) => decode_store_value(key, &first_delta.old_value),
             None => balance_store
                 .get_last(key)
-                .unwrap_or_else(BigInt::zero),
+                .unwrap_or_else(|| {
+                    panic!("Lido V4 store key {key} was never seeded; the store module runs first")
+                }),
         }
     };
 
@@ -304,14 +306,21 @@ fn block_start_balance_state(
 }
 
 /// `StoreSetBigInt` serialises values as decimal strings.
-fn decode_store_value(bytes: &[u8]) -> BigInt {
+///
+/// A value that does not decode is a bug in the store module or the runtime, not a pool that
+/// holds nothing - and this package exists to keep a zero pooled ether from reaching consumers,
+/// where it is indistinguishable from a real one. So it fails loudly, naming the key.
+///
+/// An empty value is not that: `StoreDeltas` carries an empty `old_value` for a key's first
+/// write, which is the seed on `start_block`.
+fn decode_store_value(key: &str, bytes: &[u8]) -> BigInt {
     if bytes.is_empty() {
         return BigInt::zero();
     }
-    std::str::from_utf8(bytes)
-        .ok()
-        .and_then(|text| text.parse::<BigInt>().ok())
-        .unwrap_or_else(BigInt::zero)
+    let text = std::str::from_utf8(bytes)
+        .unwrap_or_else(|_| panic!("Lido V4 store key {key} holds non-UTF-8 bytes: {bytes:02x?}"));
+    text.parse::<BigInt>()
+        .unwrap_or_else(|_| panic!("Lido V4 store key {key} holds an unparsable value: {text:?}"))
 }
 
 #[cfg(test)]
@@ -372,6 +381,36 @@ mod tests {
             }
             assert!(next <= 256, "slot overflows a word at {}", slot.fields[0].attribute);
         }
+    }
+
+    /// A key's first delta carries an empty `old_value`, which means "nothing yet", not a
+    /// malformed store.
+    #[test]
+    fn an_empty_store_value_decodes_to_zero() {
+        assert_eq!(decode_store_value(TOTAL_AND_EXTERNAL_SHARES_KEY, &[]), BigInt::zero());
+    }
+
+    #[test]
+    fn a_decimal_store_value_round_trips() {
+        assert_eq!(
+            decode_store_value(TOTAL_AND_EXTERNAL_SHARES_KEY, b"7526667021904051320418763"),
+            "7526667021904051320418763"
+                .parse::<BigInt>()
+                .unwrap()
+        );
+    }
+
+    /// Zero is a plausible pooled ether, so a value that cannot be decoded must not become one.
+    #[test]
+    #[should_panic(expected = "unparsable value")]
+    fn an_unparsable_store_value_panics_rather_than_reading_as_zero() {
+        decode_store_value(TOTAL_AND_EXTERNAL_SHARES_KEY, b"not a number");
+    }
+
+    #[test]
+    #[should_panic(expected = "non-UTF-8")]
+    fn a_non_utf8_store_value_panics() {
+        decode_store_value(TOTAL_AND_EXTERNAL_SHARES_KEY, &[0xff, 0xfe]);
     }
 
     /// The three inputs `BalanceState` reconstructs `totalPooledEther` from, and only those.
