@@ -1,4 +1,4 @@
-//! Lido V3 indexing: the stETH staking pool and the wstETH wrapper.
+//! Lido V4 indexing: the stETH staking pool and the wstETH wrapper.
 //!
 //! Neither contract has a creation event to discover, so the manifest carries a storage snapshot
 //! in `params` and every later block is driven by raw stETH storage writes.
@@ -66,11 +66,11 @@ fn create_components() -> Vec<ProtocolComponent> {
         ProtocolComponent::new(STETH_COMPONENT_ID)
             .with_tokens(&[STETH_ADDRESS, ETH_ADDRESS])
             .with_attributes(&[(TOKEN_TO_TRACK_TOTAL_POOLED_ETH_ATTR, ETH_ADDRESS.as_ref())])
-            .as_swap_type("lido_v3_pool", ImplementationType::Custom),
+            .as_swap_type("lido_v4_pool", ImplementationType::Custom),
         ProtocolComponent::new(WSTETH_COMPONENT_ID)
             .with_tokens(&[STETH_ADDRESS, WSTETH_ADDRESS])
             .with_attributes(&[(TOKEN_TO_TRACK_TOTAL_POOLED_ETH_ATTR, STETH_ADDRESS.as_ref())])
-            .as_swap_type("lido_v3_pool", ImplementationType::Custom),
+            .as_swap_type("lido_v4_pool", ImplementationType::Custom),
     ]
 }
 
@@ -79,12 +79,12 @@ fn create_components() -> Vec<ProtocolComponent> {
 /// `start_block`.
 #[substreams::handlers::store]
 pub fn store_balance_slots(params: String, block: eth::v2::Block, store: StoreSetBigInt) {
-    let initial_state = InitialState::parse(&params).expect("Failed to parse Lido V3 params");
+    let initial_state = InitialState::parse(&params).expect("Failed to parse Lido V4 params");
 
     if block.number == initial_state.start_block {
         let seed = initial_state
             .balance_state()
-            .expect("Failed to decode the Lido V3 initial state");
+            .expect("Failed to decode the Lido V4 initial state");
         store.set(0, TOTAL_AND_EXTERNAL_SHARES_KEY, &seed.total_and_external_shares);
         store.set(
             0,

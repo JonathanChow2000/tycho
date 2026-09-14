@@ -1,6 +1,6 @@
 specVersion: v0.1.0
 package:
-  name: "ethereum_lido_v3"
+  name: "ethereum_lido_v4"
   version: v0.1.0
 
 protobuf:
@@ -13,7 +13,7 @@ protobuf:
 binaries:
   default:
     type: wasm/rust-v1
-    file: ../target/wasm32-unknown-unknown/release/ethereum_lido_v3.wasm
+    file: ../target/wasm32-unknown-unknown/release/ethereum_lido_v4.wasm
 
 network: mainnet
 

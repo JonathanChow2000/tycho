@@ -29,7 +29,7 @@ pub struct InitialState {
 impl InitialState {
     pub fn parse(params: &str) -> Result<Self> {
         serde_json::from_str(params)
-            .map_err(|e| anyhow!("Failed to parse Lido V3 initial state: {e}"))
+            .map_err(|e| anyhow!("Failed to parse Lido V4 initial state: {e}"))
     }
 
     pub fn steth_creation_attributes(&self) -> Result<Vec<Attribute>> {

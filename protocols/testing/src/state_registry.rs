@@ -4,7 +4,7 @@ use tycho_simulation::{
         protocol::{
             aerodrome_slipstreams::state::AerodromeSlipstreamsState, ekubo::state::EkuboState,
             ekubo_v3::state::EkuboV3State, filters::ekubo_v3_extension_filter, fluid::FluidV1,
-            lido_v3::state::LidoV3State, lunarbase::LunarBaseState,
+            lido_v4::state::LidoV4State, lunarbase::LunarBaseState,
             pancakeswap_v2::state::PancakeswapV2State, ramses_v3::state::RamsesV3State,
             ring_swap_v2::state::RingSwapV2State, rocketpool::state::RocketpoolState,
             sky::state::SkyState, uniswap_v2::state::UniswapV2State,
@@ -88,7 +88,7 @@ pub fn register_protocol(
             None,
             decoder_context,
         ),
-        "lido_v3" => stream_builder.exchange_with_decoder_context::<LidoV3State>(
+        "lido_v4" => stream_builder.exchange_with_decoder_context::<LidoV4State>(
             protocol_system,
             tvl_filter,
             None,

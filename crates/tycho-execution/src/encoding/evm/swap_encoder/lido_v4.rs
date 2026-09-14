@@ -10,7 +10,7 @@ use crate::encoding::{
 };
 
 #[derive(Clone)]
-pub struct LidoV3SwapEncoder {
+pub struct LidoV4SwapEncoder {
     executor_address: Bytes,
     steth_address: Bytes,
     wsteth_address: Bytes,
@@ -18,33 +18,33 @@ pub struct LidoV3SwapEncoder {
 }
 
 #[repr(u8)]
-enum LidoV3Direction {
+enum LidoV4Direction {
     Submit = 0,
     Wrap = 1,
     Unwrap = 2,
 }
 
-impl SwapEncoder for LidoV3SwapEncoder {
+impl SwapEncoder for LidoV4SwapEncoder {
     fn new(
         executor_address: Bytes,
         chain: Chain,
         config: Option<HashMap<String, String>>,
     ) -> Result<Self, EncodingError> {
         let config = config
-            .ok_or_else(|| EncodingError::FatalError("Lido V3 config is empty".to_string()))?;
+            .ok_or_else(|| EncodingError::FatalError("Lido V4 config is empty".to_string()))?;
 
         let steth_address = config
             .get("steth_address")
             .map(|a| Bytes::from(a.as_str()))
             .ok_or_else(|| {
-                EncodingError::FatalError("Missing steth_address in lido_v3 config".to_string())
+                EncodingError::FatalError("Missing steth_address in lido_v4 config".to_string())
             })?;
 
         let wsteth_address = config
             .get("wsteth_address")
             .map(|a| Bytes::from(a.as_str()))
             .ok_or_else(|| {
-                EncodingError::FatalError("Missing wsteth_address in lido_v3 config".to_string())
+                EncodingError::FatalError("Missing wsteth_address in lido_v4 config".to_string())
             })?;
 
         Ok(Self {
@@ -63,15 +63,15 @@ impl SwapEncoder for LidoV3SwapEncoder {
         let direction = if *swap.token_in().address == self.native_token_address &&
             *swap.token_out().address == self.steth_address
         {
-            LidoV3Direction::Submit
+            LidoV4Direction::Submit
         } else if *swap.token_in().address == self.steth_address &&
             *swap.token_out().address == self.wsteth_address
         {
-            LidoV3Direction::Wrap
+            LidoV4Direction::Wrap
         } else if *swap.token_in().address == self.wsteth_address &&
             *swap.token_out().address == self.steth_address
         {
-            LidoV3Direction::Unwrap
+            LidoV4Direction::Unwrap
         } else {
             return Err(EncodingError::InvalidInput("Combination not allowed".to_string()))
         };
@@ -102,7 +102,7 @@ mod tests {
     const STETH_ADDRESS: &str = "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84";
     const WSTETH_ADDRESS: &str = "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0";
 
-    fn lido_v3_config() -> HashMap<String, String> {
+    fn lido_v4_config() -> HashMap<String, String> {
         HashMap::from([
             ("steth_address".to_string(), STETH_ADDRESS.to_string()),
             ("wsteth_address".to_string(), WSTETH_ADDRESS.to_string()),
@@ -117,20 +117,20 @@ mod tests {
         }
     }
 
-    fn encoder() -> LidoV3SwapEncoder {
-        LidoV3SwapEncoder::new(
+    fn encoder() -> LidoV4SwapEncoder {
+        LidoV4SwapEncoder::new(
             Bytes::from("0x543778987b293C7E8Cf0722BB2e935ba6f4068D4"),
             Chain::Ethereum,
-            Some(lido_v3_config()),
+            Some(lido_v4_config()),
         )
         .unwrap()
     }
 
     #[test]
-    fn test_encode_lido_v3_submit() {
+    fn test_encode_lido_v4_submit() {
         let component = ProtocolComponent {
             id: STETH_ADDRESS.to_string(),
-            protocol_system: "lido_v3".to_string(),
+            protocol_system: "lido_v4".to_string(),
             ..Default::default()
         };
         let token_in = Bytes::from("0x0000000000000000000000000000000000000000");
@@ -148,14 +148,14 @@ mod tests {
         let hex_swap = encode(&encoded_swap);
 
         assert_eq!(hex_swap, "00");
-        write_calldata_to_file("test_encode_lido_v3_submit", hex_swap.as_str());
+        write_calldata_to_file("test_encode_lido_v4_submit", hex_swap.as_str());
     }
 
     #[test]
-    fn test_encode_lido_v3_wrap() {
+    fn test_encode_lido_v4_wrap() {
         let component = ProtocolComponent {
             id: WSTETH_ADDRESS.to_string(),
-            protocol_system: "lido_v3".to_string(),
+            protocol_system: "lido_v4".to_string(),
             ..Default::default()
         };
         let token_in = Bytes::from(STETH_ADDRESS);
@@ -173,14 +173,14 @@ mod tests {
         let hex_swap = encode(&encoded_swap);
 
         assert_eq!(hex_swap, "01");
-        write_calldata_to_file("test_encode_lido_v3_wrap", hex_swap.as_str());
+        write_calldata_to_file("test_encode_lido_v4_wrap", hex_swap.as_str());
     }
 
     #[test]
-    fn test_encode_lido_v3_unwrap() {
+    fn test_encode_lido_v4_unwrap() {
         let component = ProtocolComponent {
             id: WSTETH_ADDRESS.to_string(),
-            protocol_system: "lido_v3".to_string(),
+            protocol_system: "lido_v4".to_string(),
             ..Default::default()
         };
         let token_in = Bytes::from(WSTETH_ADDRESS);
@@ -198,14 +198,14 @@ mod tests {
         let hex_swap = encode(&encoded_swap);
 
         assert_eq!(hex_swap, "02");
-        write_calldata_to_file("test_encode_lido_v3_unwrap", hex_swap.as_str());
+        write_calldata_to_file("test_encode_lido_v4_unwrap", hex_swap.as_str());
     }
 
     #[test]
-    fn test_encode_lido_v3_invalid_pair() {
+    fn test_encode_lido_v4_invalid_pair() {
         let component = ProtocolComponent {
             id: STETH_ADDRESS.to_string(),
-            protocol_system: "lido_v3".to_string(),
+            protocol_system: "lido_v4".to_string(),
             ..Default::default()
         };
         let token_in = Bytes::from(WSTETH_ADDRESS);

@@ -38,14 +38,14 @@ const WRAP_GAS: u64 = 81_000;
 const UNWRAP_GAS: u64 = 66_000;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum LidoV3PoolKind {
+pub enum LidoV4PoolKind {
     StEth,
     WstEth,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LidoV3State {
-    kind: LidoV3PoolKind,
+pub struct LidoV4State {
+    kind: LidoV4PoolKind,
     block_number: u64,
     block_timestamp: u64,
     total_shares: U256,
@@ -70,10 +70,10 @@ pub struct StakingState {
     max_stake_limit: U256,
 }
 
-impl LidoV3State {
+impl LidoV4State {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        kind: LidoV3PoolKind,
+        kind: LidoV4PoolKind,
         block_number: u64,
         block_timestamp: u64,
         total_shares: U256,
@@ -333,15 +333,15 @@ impl StakingState {
 }
 
 #[typetag::serde]
-impl ProtocolSim for LidoV3State {
+impl ProtocolSim for LidoV4State {
     fn fee(&self) -> f64 {
         0f64
     }
 
     fn spot_price(&self, base: &Token, quote: &Token) -> Result<f64, SimulationError> {
         match self.kind {
-            LidoV3PoolKind::StEth => self.steth_spot_price(base, quote),
-            LidoV3PoolKind::WstEth => self.wsteth_spot_price(base, quote),
+            LidoV4PoolKind::StEth => self.steth_spot_price(base, quote),
+            LidoV4PoolKind::WstEth => self.wsteth_spot_price(base, quote),
         }
     }
 
@@ -354,19 +354,19 @@ impl ProtocolSim for LidoV3State {
         let amount_in = biguint_to_u256(&amount_in);
 
         match self.kind {
-            LidoV3PoolKind::StEth
+            LidoV4PoolKind::StEth
                 if token_in.address.as_ref() == ETH_ADDRESS &&
                     token_out.address.as_ref() == STETH_ADDRESS =>
             {
                 self.amount_out_eth_to_steth(amount_in)
             }
-            LidoV3PoolKind::WstEth
+            LidoV4PoolKind::WstEth
                 if token_in.address.as_ref() == STETH_ADDRESS &&
                     token_out.address.as_ref() == WSTETH_ADDRESS =>
             {
                 self.amount_out_steth_to_wsteth(amount_in)
             }
-            LidoV3PoolKind::WstEth
+            LidoV4PoolKind::WstEth
                 if token_in.address.as_ref() == WSTETH_ADDRESS &&
                     token_out.address.as_ref() == STETH_ADDRESS =>
             {
@@ -384,7 +384,7 @@ impl ProtocolSim for LidoV3State {
         let max_input = U256::from(UINT128_MAX_EXCLUSIVE) - U256::ONE;
 
         match self.kind {
-            LidoV3PoolKind::StEth
+            LidoV4PoolKind::StEth
                 if sell_token.as_ref() == ETH_ADDRESS && buy_token.as_ref() == STETH_ADDRESS =>
             {
                 let max_sell = self
@@ -399,7 +399,7 @@ impl ProtocolSim for LidoV3State {
                     .amount;
                 Ok((u256_to_biguint(max_sell), max_buy))
             }
-            LidoV3PoolKind::WstEth
+            LidoV4PoolKind::WstEth
                 if sell_token.as_ref() == STETH_ADDRESS && buy_token.as_ref() == WSTETH_ADDRESS =>
             {
                 // Wrapping mints against the caller's own stETH, so the protocol only bounds it
@@ -410,7 +410,7 @@ impl ProtocolSim for LidoV3State {
                     u256_to_biguint(self.shares_for_pooled_eth(max_sell)?),
                 ))
             }
-            LidoV3PoolKind::WstEth
+            LidoV4PoolKind::WstEth
                 if sell_token.as_ref() == WSTETH_ADDRESS && buy_token.as_ref() == STETH_ADDRESS =>
             {
                 // Unwrapping pays out of the stETH the wrapper holds, so it is bounded by the
@@ -558,9 +558,9 @@ mod tests {
         }
     }
 
-    fn sample_steth_state() -> LidoV3State {
-        LidoV3State::new(
-            LidoV3PoolKind::StEth,
+    fn sample_steth_state() -> LidoV4State {
+        LidoV4State::new(
+            LidoV4PoolKind::StEth,
             24_083_113,
             1_744_791_234,
             U256::from_str_radix("6696604823358181328750512", 10).unwrap(),
@@ -579,9 +579,9 @@ mod tests {
         U256::from_str_radix("2960000000000000000000000", 10).unwrap()
     }
 
-    fn sample_wsteth_state() -> LidoV3State {
+    fn sample_wsteth_state() -> LidoV4State {
         let mut state = sample_steth_state();
-        state.kind = LidoV3PoolKind::WstEth;
+        state.kind = LidoV4PoolKind::WstEth;
         state.staking_state = None;
         state.wsteth_shares = Some(sample_wsteth_shares());
         state
@@ -594,7 +594,7 @@ mod tests {
             (state.max_stake_limit << 160u32)
     }
 
-    fn snapshot_for(kind: LidoV3PoolKind) -> tycho_client::feed::synchronizer::ComponentWithState {
+    fn snapshot_for(kind: LidoV4PoolKind) -> tycho_client::feed::synchronizer::ComponentWithState {
         let state = sample_steth_state();
         let mut attributes = HashMap::from([
             (
@@ -618,21 +618,21 @@ mod tests {
                 ),
             ),
         ]);
-        if kind == LidoV3PoolKind::WstEth {
+        if kind == LidoV4PoolKind::WstEth {
             attributes.insert(
                 WSTETH_SHARES_ATTR.to_string(),
                 Bytes::from(sample_wsteth_shares().to_be_bytes_vec()),
             );
         }
         let component_id = match kind {
-            LidoV3PoolKind::StEth => {
+            LidoV4PoolKind::StEth => {
                 attributes.insert(
                     STAKING_STATE_ATTR.to_string(),
                     Bytes::from(staking_state_raw(sample_staking_state()).to_be_bytes_vec()),
                 );
                 STETH_COMPONENT_ID.to_string()
             }
-            LidoV3PoolKind::WstEth => WSTETH_COMPONENT_ID.to_string(),
+            LidoV4PoolKind::WstEth => WSTETH_COMPONENT_ID.to_string(),
         };
 
         tycho_client::feed::synchronizer::ComponentWithState {
@@ -643,8 +643,8 @@ mod tests {
             },
             component: ProtocolComponent {
                 id: component_id,
-                protocol_system: "lido_v3".to_string(),
-                protocol_type_name: "lido_v3_pool".to_string(),
+                protocol_system: "lido_v4".to_string(),
+                protocol_type_name: "lido_v4_pool".to_string(),
                 chain: Chain::Ethereum,
                 tokens: Vec::new(),
                 contract_addresses: Vec::new(),
@@ -663,7 +663,7 @@ mod tests {
         let low = U256::from(123u64);
         let high = U256::from(456u64);
         let packed = low | (high << 128u32);
-        let decoded = LidoV3State::split_low_high_u128(packed);
+        let decoded = LidoV4State::split_low_high_u128(packed);
         assert_eq!(decoded, (low, high));
     }
 
@@ -677,11 +677,11 @@ mod tests {
     #[tokio::test]
     async fn decoder_reads_steth_snapshot() {
         let state =
-            try_decode_snapshot_with_defaults::<LidoV3State>(snapshot_for(LidoV3PoolKind::StEth))
+            try_decode_snapshot_with_defaults::<LidoV4State>(snapshot_for(LidoV4PoolKind::StEth))
                 .await
                 .unwrap();
 
-        assert_eq!(state.kind, LidoV3PoolKind::StEth);
+        assert_eq!(state.kind, LidoV4PoolKind::StEth);
         assert!(state.staking_state.is_some());
         assert_eq!(state.total_shares, sample_steth_state().total_shares);
     }
@@ -689,11 +689,11 @@ mod tests {
     #[tokio::test]
     async fn decoder_reads_wsteth_snapshot() {
         let state =
-            try_decode_snapshot_with_defaults::<LidoV3State>(snapshot_for(LidoV3PoolKind::WstEth))
+            try_decode_snapshot_with_defaults::<LidoV4State>(snapshot_for(LidoV4PoolKind::WstEth))
                 .await
                 .unwrap();
 
-        assert_eq!(state.kind, LidoV3PoolKind::WstEth);
+        assert_eq!(state.kind, LidoV4PoolKind::WstEth);
         assert!(state.staking_state.is_none());
         assert_eq!(state.buffered_ether, sample_steth_state().buffered_ether);
     }
@@ -710,7 +710,7 @@ mod tests {
         let new_state = result
             .new_state
             .as_any()
-            .downcast_ref::<LidoV3State>()
+            .downcast_ref::<LidoV4State>()
             .unwrap();
         assert_eq!(
             new_state.buffered_ether,
@@ -739,7 +739,7 @@ mod tests {
         let wrapped_state = wrap
             .new_state
             .as_any()
-            .downcast_ref::<LidoV3State>()
+            .downcast_ref::<LidoV4State>()
             .unwrap();
         assert_eq!(wrapped_state, &state);
 
@@ -749,7 +749,7 @@ mod tests {
         let unwrapped_state = unwrap
             .new_state
             .as_any()
-            .downcast_ref::<LidoV3State>()
+            .downcast_ref::<LidoV4State>()
             .unwrap();
         assert_eq!(unwrapped_state, &state);
         assert!(unwrap.amount > BigUint::ZERO);
@@ -984,8 +984,8 @@ mod tests {
     /// same block, which pins the v4 pooled-ether formula to the chain.
     #[test]
     fn share_rate_matches_chain_on_the_v4_storage_layout() {
-        let state = LidoV3State::new(
-            LidoV3PoolKind::WstEth,
+        let state = LidoV4State::new(
+            LidoV4PoolKind::WstEth,
             25_603_297,
             1_784_904_479,
             U256::from_str_radix("7526667021904051320418763", 10).unwrap(),
@@ -1015,8 +1015,8 @@ mod tests {
 
     #[tokio::test]
     async fn decoder_uses_header_block_info() {
-        let snapshot = snapshot_for(LidoV3PoolKind::StEth);
-        let state = LidoV3State::try_from_with_header(
+        let snapshot = snapshot_for(LidoV4PoolKind::StEth);
+        let state = LidoV4State::try_from_with_header(
             snapshot,
             BlockHeader {
                 number: 123,

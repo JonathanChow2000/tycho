@@ -4,35 +4,35 @@ import "../TychoRouterTestSetup.sol";
 import {Constants} from "../Constants.sol";
 import {TransferManager} from "../../src/TransferManager.sol";
 import {
-    LidoV3Executor,
-    LidoV3Executor__InvalidDataLength,
-    LidoV3Executor__InvalidDirection,
+    LidoV4Executor,
+    LidoV4Executor__InvalidDataLength,
+    LidoV4Executor__InvalidDirection,
     IStETH,
     IWstETH,
-    LidoV3Direction
-} from "../../src/executors/LidoV3Executor.sol";
+    LidoV4Direction
+} from "../../src/executors/LidoV4Executor.sol";
 import {TestUtils} from "../TestUtils.sol";
 
-contract LidoV3ExecutorExposed is LidoV3Executor {
+contract LidoV4ExecutorExposed is LidoV4Executor {
     constructor(address stEthAddress, address wstEthAddress)
-        LidoV3Executor(stEthAddress, wstEthAddress)
+        LidoV4Executor(stEthAddress, wstEthAddress)
     {}
 
     function decodeParams(bytes calldata data)
         external
         pure
-        returns (LidoV3Direction direction)
+        returns (LidoV4Direction direction)
     {
         return _decodeData(data);
     }
 }
 
-contract LidoV3ExecutorTest is TestUtils, Constants {
-    LidoV3ExecutorExposed lidoV3Executor;
+contract LidoV4ExecutorTest is TestUtils, Constants {
+    LidoV4ExecutorExposed lidoV4Executor;
 
     function setUp() public {
-        vm.createSelectFork(vm.rpcUrl("mainnet"), 24480104);
-        lidoV3Executor = new LidoV3ExecutorExposed(STETH_ADDR, WSTETH_ADDR);
+        vm.createSelectFork(vm.rpcUrl("mainnet"), 25603404);
+        lidoV4Executor = new LidoV4ExecutorExposed(STETH_ADDR, WSTETH_ADDR);
     }
 
     function _mintStEthToExecutor(uint256 depositAmount)
@@ -40,63 +40,63 @@ contract LidoV3ExecutorTest is TestUtils, Constants {
         returns (uint256 minted)
     {
         bytes memory submitData =
-            abi.encodePacked(uint8(LidoV3Direction.EthToStEth));
+            abi.encodePacked(uint8(LidoV4Direction.EthToStEth));
 
         vm.deal(address(this), depositAmount);
         uint256 balanceBefore =
-            IERC20(STETH_ADDR).balanceOf(address(lidoV3Executor));
+            IERC20(STETH_ADDR).balanceOf(address(lidoV4Executor));
 
-        lidoV3Executor.swap{value: depositAmount}(
-            depositAmount, submitData, address(lidoV3Executor)
+        lidoV4Executor.swap{value: depositAmount}(
+            depositAmount, submitData, address(lidoV4Executor)
         );
 
         uint256 balanceAfter =
-            IERC20(STETH_ADDR).balanceOf(address(lidoV3Executor));
+            IERC20(STETH_ADDR).balanceOf(address(lidoV4Executor));
         minted = balanceAfter - balanceBefore;
     }
 
     function testDecodeParamsSubmit() public view {
         bytes memory params =
-            abi.encodePacked(uint8(LidoV3Direction.EthToStEth));
-        LidoV3Direction direction = lidoV3Executor.decodeParams(params);
+            abi.encodePacked(uint8(LidoV4Direction.EthToStEth));
+        LidoV4Direction direction = lidoV4Executor.decodeParams(params);
 
-        assertEq(uint8(direction), uint8(LidoV3Direction.EthToStEth));
+        assertEq(uint8(direction), uint8(LidoV4Direction.EthToStEth));
     }
 
     function testDecodeParamsWrap() public view {
         bytes memory params =
-            abi.encodePacked(uint8(LidoV3Direction.StEthToWstEth));
-        LidoV3Direction direction = lidoV3Executor.decodeParams(params);
+            abi.encodePacked(uint8(LidoV4Direction.StEthToWstEth));
+        LidoV4Direction direction = lidoV4Executor.decodeParams(params);
 
-        assertEq(uint8(direction), uint8(LidoV3Direction.StEthToWstEth));
+        assertEq(uint8(direction), uint8(LidoV4Direction.StEthToWstEth));
     }
 
     function testDecodeParamsUnwrap() public view {
         bytes memory params =
-            abi.encodePacked(uint8(LidoV3Direction.WstEthToStEth));
-        LidoV3Direction direction = lidoV3Executor.decodeParams(params);
+            abi.encodePacked(uint8(LidoV4Direction.WstEthToStEth));
+        LidoV4Direction direction = lidoV4Executor.decodeParams(params);
 
-        assertEq(uint8(direction), uint8(LidoV3Direction.WstEthToStEth));
+        assertEq(uint8(direction), uint8(LidoV4Direction.WstEthToStEth));
     }
 
     function testDecodeParamsInvalidDataLength() public {
         bytes memory invalidParams =
-            abi.encodePacked(uint8(LidoV3Direction.EthToStEth), uint8(1));
+            abi.encodePacked(uint8(LidoV4Direction.EthToStEth), uint8(1));
 
-        vm.expectRevert(LidoV3Executor__InvalidDataLength.selector);
-        lidoV3Executor.decodeParams(invalidParams);
+        vm.expectRevert(LidoV4Executor__InvalidDataLength.selector);
+        lidoV4Executor.decodeParams(invalidParams);
     }
 
     function testDecodeParamsInvalidDirection() public {
         bytes memory invalidParams = abi.encodePacked(uint8(3));
 
-        vm.expectRevert(LidoV3Executor__InvalidDirection.selector);
-        lidoV3Executor.decodeParams(invalidParams);
+        vm.expectRevert(LidoV4Executor__InvalidDirection.selector);
+        lidoV4Executor.decodeParams(invalidParams);
     }
 
     function testGetTransferDataSubmit() public {
         bytes memory params =
-            abi.encodePacked(uint8(LidoV3Direction.EthToStEth));
+            abi.encodePacked(uint8(LidoV4Direction.EthToStEth));
 
         (
             TransferManager.TransferType transferType,
@@ -104,7 +104,7 @@ contract LidoV3ExecutorTest is TestUtils, Constants {
             address tokenIn,
             address tokenOut,
             bool outputToRouter
-        ) = lidoV3Executor.getTransferData(params);
+        ) = lidoV4Executor.getTransferData(params);
 
         assertEq(
             uint8(transferType),
@@ -118,7 +118,7 @@ contract LidoV3ExecutorTest is TestUtils, Constants {
 
     function testGetTransferDataWrap() public {
         bytes memory params =
-            abi.encodePacked(uint8(LidoV3Direction.StEthToWstEth));
+            abi.encodePacked(uint8(LidoV4Direction.StEthToWstEth));
 
         (
             TransferManager.TransferType transferType,
@@ -126,7 +126,7 @@ contract LidoV3ExecutorTest is TestUtils, Constants {
             address tokenIn,
             address tokenOut,
             bool outputToRouter
-        ) = lidoV3Executor.getTransferData(params);
+        ) = lidoV4Executor.getTransferData(params);
 
         assertEq(
             uint8(transferType),
@@ -140,7 +140,7 @@ contract LidoV3ExecutorTest is TestUtils, Constants {
 
     function testGetTransferDataUnwrap() public {
         bytes memory params =
-            abi.encodePacked(uint8(LidoV3Direction.WstEthToStEth));
+            abi.encodePacked(uint8(LidoV4Direction.WstEthToStEth));
 
         (
             TransferManager.TransferType transferType,
@@ -148,7 +148,7 @@ contract LidoV3ExecutorTest is TestUtils, Constants {
             address tokenIn,
             address tokenOut,
             bool outputToRouter
-        ) = lidoV3Executor.getTransferData(params);
+        ) = lidoV4Executor.getTransferData(params);
 
         assertEq(
             uint8(transferType),
@@ -163,58 +163,58 @@ contract LidoV3ExecutorTest is TestUtils, Constants {
     function testSwapSubmit() public {
         uint256 amountIn = 1 ether;
         bytes memory protocolData =
-            abi.encodePacked(uint8(LidoV3Direction.EthToStEth));
+            abi.encodePacked(uint8(LidoV4Direction.EthToStEth));
 
         vm.deal(address(this), amountIn);
         uint256 balanceBefore =
-            IERC20(STETH_ADDR).balanceOf(address(lidoV3Executor));
+            IERC20(STETH_ADDR).balanceOf(address(lidoV4Executor));
 
-        lidoV3Executor.swap{value: amountIn}(amountIn, protocolData, BOB);
+        lidoV4Executor.swap{value: amountIn}(amountIn, protocolData, BOB);
 
         uint256 balanceAfter =
-            IERC20(STETH_ADDR).balanceOf(address(lidoV3Executor));
+            IERC20(STETH_ADDR).balanceOf(address(lidoV4Executor));
         assertGt(balanceAfter, balanceBefore);
     }
 
     function testSwapWrap() public {
         uint256 amountIn = _mintStEthToExecutor(1 ether);
         bytes memory protocolData =
-            abi.encodePacked(uint8(LidoV3Direction.StEthToWstEth));
+            abi.encodePacked(uint8(LidoV4Direction.StEthToWstEth));
 
-        vm.prank(address(lidoV3Executor));
+        vm.prank(address(lidoV4Executor));
         IERC20(STETH_ADDR).approve(WSTETH_ADDR, amountIn);
 
         uint256 balanceBefore =
-            IERC20(WSTETH_ADDR).balanceOf(address(lidoV3Executor));
+            IERC20(WSTETH_ADDR).balanceOf(address(lidoV4Executor));
 
-        lidoV3Executor.swap(amountIn, protocolData, BOB);
+        lidoV4Executor.swap(amountIn, protocolData, BOB);
 
         uint256 balanceAfter =
-            IERC20(WSTETH_ADDR).balanceOf(address(lidoV3Executor));
+            IERC20(WSTETH_ADDR).balanceOf(address(lidoV4Executor));
         assertGt(balanceAfter, balanceBefore);
     }
 
     function testSwapUnwrap() public {
         uint256 amountIn = 1 ether;
         bytes memory protocolData =
-            abi.encodePacked(uint8(LidoV3Direction.WstEthToStEth));
+            abi.encodePacked(uint8(LidoV4Direction.WstEthToStEth));
 
-        deal(WSTETH_ADDR, address(lidoV3Executor), amountIn);
+        deal(WSTETH_ADDR, address(lidoV4Executor), amountIn);
 
         uint256 balanceBefore =
-            IERC20(STETH_ADDR).balanceOf(address(lidoV3Executor));
+            IERC20(STETH_ADDR).balanceOf(address(lidoV4Executor));
 
-        lidoV3Executor.swap(amountIn, protocolData, BOB);
+        lidoV4Executor.swap(amountIn, protocolData, BOB);
 
         uint256 balanceAfter =
-            IERC20(STETH_ADDR).balanceOf(address(lidoV3Executor));
+            IERC20(STETH_ADDR).balanceOf(address(lidoV4Executor));
         assertGt(balanceAfter, balanceBefore);
     }
 }
 
-contract TychoRouterForLidoV3Test is TychoRouterTestSetup {
+contract TychoRouterForLidoV4Test is TychoRouterTestSetup {
     function getForkBlock() public pure override returns (uint256) {
-        return 24480104;
+        return 25603404;
     }
 
     function _mintStEthTo(address recipient, uint256 depositAmount)
@@ -231,11 +231,11 @@ contract TychoRouterForLidoV3Test is TychoRouterTestSetup {
         minted = balanceAfter - balanceBefore;
     }
 
-    function testSingleLidoV3SubmitIntegration() public {
+    function testSingleLidoV4SubmitIntegration() public {
         IERC20 stEth = IERC20(STETH_ADDR);
         uint256 amountIn = 1 ether;
         bytes memory callData = loadCallDataFromFile(
-            "test_single_encoding_strategy_lido_v3_submit"
+            "test_single_encoding_strategy_lido_v4_submit"
         );
 
         vm.deal(ALICE, amountIn);
@@ -251,11 +251,11 @@ contract TychoRouterForLidoV3Test is TychoRouterTestSetup {
         assertEq(tychoRouterAddr.balance, 0);
     }
 
-    function testSingleLidoV3WrapIntegration() public {
+    function testSingleLidoV4WrapIntegration() public {
         IERC20 wstEth = IERC20(WSTETH_ADDR);
         uint256 amountIn = 1 ether;
         bytes memory callData =
-            loadCallDataFromFile("test_single_encoding_strategy_lido_v3_wrap");
+            loadCallDataFromFile("test_single_encoding_strategy_lido_v4_wrap");
 
         _mintStEthTo(ALICE, 2 ether);
         vm.startPrank(ALICE);
@@ -271,11 +271,11 @@ contract TychoRouterForLidoV3Test is TychoRouterTestSetup {
         assertEq(wstEth.balanceOf(tychoRouterAddr), 0);
     }
 
-    function testSingleLidoV3UnwrapIntegration() public {
+    function testSingleLidoV4UnwrapIntegration() public {
         IERC20 stEth = IERC20(STETH_ADDR);
         uint256 amountIn = 1 ether;
         bytes memory callData = loadCallDataFromFile(
-            "test_single_encoding_strategy_lido_v3_unwrap"
+            "test_single_encoding_strategy_lido_v4_unwrap"
         );
 
         deal(WSTETH_ADDR, ALICE, amountIn);
@@ -292,11 +292,11 @@ contract TychoRouterForLidoV3Test is TychoRouterTestSetup {
         assertLe(stEth.balanceOf(tychoRouterAddr), 1);
     }
 
-    function testSequentialLidoV3SubmitThenWrapIntegration() public {
+    function testSequentialLidoV4SubmitThenWrapIntegration() public {
         IERC20 wstEth = IERC20(WSTETH_ADDR);
         uint256 amountIn = 1 ether;
         bytes memory callData = loadCallDataFromFile(
-            "test_sequential_encoding_strategy_lido_v3_submit_then_wrap"
+            "test_sequential_encoding_strategy_lido_v4_submit_then_wrap"
         );
 
         vm.deal(ALICE, amountIn);

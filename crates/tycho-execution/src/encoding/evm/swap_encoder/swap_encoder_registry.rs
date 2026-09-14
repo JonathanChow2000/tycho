@@ -15,7 +15,7 @@ use crate::encoding::{
             curve::CurveSwapEncoder, ekubo::EkuboSwapEncoder, ekubo_v3::EkuboV3SwapEncoder,
             erc_4626::ERC4626SwapEncoder, etherfi::EtherfiSwapEncoder, fermiswap::FermiSwapEncoder,
             fluid_v1::FluidV1SwapEncoder, hashflow::HashflowSwapEncoder,
-            lido_v3::LidoV3SwapEncoder, liquidity_party::LiquidityPartySwapEncoder,
+            lido_v4::LidoV4SwapEncoder, liquidity_party::LiquidityPartySwapEncoder,
             liquorice::LiquoriceSwapEncoder, lunarbase::LunarBaseSwapEncoder,
             maverick_v2::MaverickV2SwapEncoder, metric::MetricSwapEncoder,
             native::NativeSwapEncoder, native_wrap::WrapSwapEncoder, propamm::PropAMMSwapEncoder,
@@ -252,8 +252,8 @@ impl SwapEncoderRegistry {
             {
                 Ok(Box::new(PropAMMSwapEncoder::new(executor_address, self.chain, config)?))
             }
-            "lido_v3" => {
-                Ok(Box::new(LidoV3SwapEncoder::new(executor_address, self.chain, config)?))
+            "lido_v4" => {
+                Ok(Box::new(LidoV4SwapEncoder::new(executor_address, self.chain, config)?))
             }
             _ => Err(EncodingError::FatalError(format!(
                 "Unknown protocol system: {}",

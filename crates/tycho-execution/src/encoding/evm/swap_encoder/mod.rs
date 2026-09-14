@@ -12,7 +12,7 @@ mod etherfi;
 mod fermiswap;
 mod fluid_v1;
 mod hashflow;
-mod lido_v3;
+mod lido_v4;
 mod liquidity_party;
 mod liquorice;
 mod lunarbase;

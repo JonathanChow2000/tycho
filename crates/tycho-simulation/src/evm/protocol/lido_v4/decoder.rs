@@ -5,7 +5,7 @@ use tycho_client::feed::{synchronizer::ComponentWithState, BlockHeader};
 use tycho_common::{models::token::Token, Bytes};
 
 use super::state::{
-    LidoV3PoolKind, LidoV3State, StakingState, BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR,
+    LidoV4PoolKind, LidoV4State, StakingState, BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR,
     CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR, STAKING_STATE_ATTR, STETH_COMPONENT_ID,
     TOTAL_AND_EXTERNAL_SHARES_ATTR, WSTETH_COMPONENT_ID, WSTETH_SHARES_ATTR,
 };
@@ -14,7 +14,7 @@ use crate::protocol::{
     models::{DecoderContext, TryFromWithBlock},
 };
 
-impl TryFromWithBlock<ComponentWithState, BlockHeader> for LidoV3State {
+impl TryFromWithBlock<ComponentWithState, BlockHeader> for LidoV4State {
     type Error = InvalidSnapshotError;
 
     async fn try_from_with_header(
@@ -29,16 +29,16 @@ impl TryFromWithBlock<ComponentWithState, BlockHeader> for LidoV3State {
             .id
             .eq_ignore_ascii_case(STETH_COMPONENT_ID)
         {
-            LidoV3PoolKind::StEth
+            LidoV4PoolKind::StEth
         } else if snapshot
             .component
             .id
             .eq_ignore_ascii_case(WSTETH_COMPONENT_ID)
         {
-            LidoV3PoolKind::WstEth
+            LidoV4PoolKind::WstEth
         } else {
             return Err(InvalidSnapshotError::ValueError(format!(
-                "unknown Lido V3 component id {}",
+                "unknown Lido V4 component id {}",
                 snapshot.component.id
             )));
         };
@@ -52,7 +52,7 @@ impl TryFromWithBlock<ComponentWithState, BlockHeader> for LidoV3State {
             })
             .map(|value| U256::from_be_slice(value))?;
         let (total_shares, external_shares) =
-            LidoV3State::split_low_high_u128(total_and_external_shares);
+            LidoV4State::split_low_high_u128(total_and_external_shares);
 
         let buffered_and_deposited = snapshot
             .state
@@ -65,7 +65,7 @@ impl TryFromWithBlock<ComponentWithState, BlockHeader> for LidoV3State {
             })
             .map(|value| U256::from_be_slice(value))?;
         let (buffered_ether, deposited_post_report) =
-            LidoV3State::split_low_high_u128(buffered_and_deposited);
+            LidoV4State::split_low_high_u128(buffered_and_deposited);
 
         let cl_balances = snapshot
             .state
@@ -78,10 +78,10 @@ impl TryFromWithBlock<ComponentWithState, BlockHeader> for LidoV3State {
             })
             .map(|value| U256::from_be_slice(value))?;
         let (cl_validators_balance, cl_pending_balance) =
-            LidoV3State::split_low_high_u128(cl_balances);
+            LidoV4State::split_low_high_u128(cl_balances);
 
         let staking_state = match kind {
-            LidoV3PoolKind::StEth => Some(StakingState::from_u256(U256::from_be_slice(
+            LidoV4PoolKind::StEth => Some(StakingState::from_u256(U256::from_be_slice(
                 snapshot
                     .state
                     .attributes
@@ -90,13 +90,13 @@ impl TryFromWithBlock<ComponentWithState, BlockHeader> for LidoV3State {
                         InvalidSnapshotError::MissingAttribute(STAKING_STATE_ATTR.to_string())
                     })?,
             ))),
-            LidoV3PoolKind::WstEth => None,
+            LidoV4PoolKind::WstEth => None,
         };
 
         // Only the wstETH component tracks the wrapper's share balance; it bounds unwrapping.
         let wsteth_shares = match kind {
-            LidoV3PoolKind::StEth => None,
-            LidoV3PoolKind::WstEth => Some(U256::from_be_slice(
+            LidoV4PoolKind::StEth => None,
+            LidoV4PoolKind::WstEth => Some(U256::from_be_slice(
                 snapshot
                     .state
                     .attributes
@@ -107,7 +107,7 @@ impl TryFromWithBlock<ComponentWithState, BlockHeader> for LidoV3State {
             )),
         };
 
-        Ok(LidoV3State::new(
+        Ok(LidoV4State::new(
             kind,
             block.number,
             block.timestamp,

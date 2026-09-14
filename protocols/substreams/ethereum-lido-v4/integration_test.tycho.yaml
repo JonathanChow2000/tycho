@@ -1,14 +1,14 @@
 substreams_yaml_path: ./substreams.yaml
-protocol_system: "lido_v3"
+protocol_system: "lido_v4"
 module_name: "map_protocol_changes"
 protocol_type_names:
-  - "lido_v3_pool"
+  - "lido_v4_pool"
 # The stETH component reports getTotalPooledEther() as its ETH balance, which is protocol
 # accounting rather than the stETH contract's own ETH balance (that only holds buffered ether).
 skip_balance_check: true
 
 tests:
-  - name: test_lido_v3_component_creation
+  - name: test_lido_v4_component_creation
     start_block: 25603297
     stop_block: 25603404
     expected_components:

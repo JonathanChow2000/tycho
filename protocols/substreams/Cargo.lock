@@ -1099,7 +1099,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ethereum-lido-v3"
+name = "ethereum-lido-v4"
 version = "0.1.0"
 dependencies = [
  "anyhow",
