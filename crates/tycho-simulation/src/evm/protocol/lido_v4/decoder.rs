@@ -5,9 +5,10 @@ use tycho_client::feed::{synchronizer::ComponentWithState, BlockHeader};
 use tycho_common::{models::token::Token, Bytes};
 
 use super::state::{
-    LidoV4State, StakingState, BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR,
-    CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR, STAKING_STATE_ATTR, STETH_COMPONENT_ID,
-    TOTAL_AND_EXTERNAL_SHARES_ATTR, WSTETH_SHARES_ATTR,
+    LidoV4State, StakingState, BUFFERED_ETHER_ATTR, CL_PENDING_BALANCE_ATTR,
+    CL_VALIDATORS_BALANCE_ATTR, DEPOSITED_POST_REPORT_ATTR, EXTERNAL_SHARES_ATTR,
+    MAX_STAKE_LIMIT_ATTR, MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR, PREV_STAKE_BLOCK_NUMBER_ATTR,
+    PREV_STAKE_LIMIT_ATTR, STETH_COMPONENT_ID, TOTAL_SHARES_ATTR, WSTETH_SHARES_ATTR,
 };
 use crate::protocol::{
     errors::InvalidSnapshotError,
@@ -35,7 +36,7 @@ impl TryFromWithBlock<ComponentWithState, BlockHeader> for LidoV4State {
             )));
         }
 
-        let word = |name: &str| -> Result<U256, InvalidSnapshotError> {
+        let value = |name: &str| -> Result<U256, InvalidSnapshotError> {
             snapshot
                 .state
                 .attributes
@@ -44,25 +45,25 @@ impl TryFromWithBlock<ComponentWithState, BlockHeader> for LidoV4State {
                 .map(|value| U256::from_be_slice(value))
         };
 
-        let (total_shares, external_shares) =
-            LidoV4State::split_low_high_u128(word(TOTAL_AND_EXTERNAL_SHARES_ATTR)?);
-        let (buffered_ether, deposited_post_report) =
-            LidoV4State::split_low_high_u128(word(BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR)?);
-        let (cl_validators_balance, cl_pending_balance) = LidoV4State::split_low_high_u128(word(
-            CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR,
-        )?);
+        let staking_state = StakingState::new(
+            value(PREV_STAKE_BLOCK_NUMBER_ATTR)?.to::<u32>(),
+            value(PREV_STAKE_LIMIT_ATTR)?,
+            value(MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR)?.to::<u32>(),
+            value(MAX_STAKE_LIMIT_ATTR)?,
+        );
 
+        // Seeded from the observed header; `apply_block` moves it to the execution block before
+        // the state is quoted.
         Ok(LidoV4State::new(
             block.number,
-            block.timestamp,
-            total_shares,
-            external_shares,
-            buffered_ether,
-            deposited_post_report,
-            cl_validators_balance,
-            cl_pending_balance,
-            StakingState::from_u256(word(STAKING_STATE_ATTR)?),
-            word(WSTETH_SHARES_ATTR)?,
+            value(TOTAL_SHARES_ATTR)?,
+            value(EXTERNAL_SHARES_ATTR)?,
+            value(BUFFERED_ETHER_ATTR)?,
+            value(DEPOSITED_POST_REPORT_ATTR)?,
+            value(CL_VALIDATORS_BALANCE_ATTR)?,
+            value(CL_PENDING_BALANCE_ATTR)?,
+            staking_state,
+            value(WSTETH_SHARES_ATTR)?,
         ))
     }
 }

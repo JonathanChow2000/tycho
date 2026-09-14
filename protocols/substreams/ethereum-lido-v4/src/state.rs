@@ -6,11 +6,9 @@ use substreams::scalar::BigInt;
 
 use crate::{
     constants::{
-        BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR,
-        BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY,
-        CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR,
-        CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY, STAKING_STATE_ATTR,
-        TOTAL_AND_EXTERNAL_SHARES_ATTR, TOTAL_AND_EXTERNAL_SHARES_KEY, WSTETH_SHARES_ATTR,
+        TrackedSlot, BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY,
+        CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY, TOTAL_AND_EXTERNAL_SHARES_KEY,
+        TRACKED_SLOTS,
     },
     utils::{attribute_with_bytes, bytes_from_hex},
 };
@@ -32,26 +30,22 @@ impl InitialState {
             .map_err(|e| anyhow!("Failed to parse Lido V4 initial state: {e}"))
     }
 
-    /// Every tracked slot, since one component serves every direction.
+    /// Every tracked slot, unpacked the same way the update path unpacks a storage write. One
+    /// component serves every direction, so it carries all of them.
     pub fn creation_attributes(&self) -> Result<Vec<Attribute>> {
-        vec![
-            (TOTAL_AND_EXTERNAL_SHARES_ATTR, &self.total_and_external_shares),
-            (
-                BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR,
-                &self.buffered_ether_and_deposited_post_report,
-            ),
-            (
-                CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR,
-                &self.cl_validators_balance_and_cl_pending_balance,
-            ),
-            (STAKING_STATE_ATTR, &self.staking_state),
-            (WSTETH_SHARES_ATTR, &self.wsteth_shares),
-        ]
-        .into_iter()
-        .map(|(name, value)| {
-            Ok(attribute_with_bytes(name, &bytes_from_hex(value)?, ChangeType::Creation))
-        })
-        .collect::<Result<Vec<_>>>()
+        let words = [
+            &self.total_and_external_shares,
+            &self.buffered_ether_and_deposited_post_report,
+            &self.cl_validators_balance_and_cl_pending_balance,
+            &self.staking_state,
+            &self.wsteth_shares,
+        ];
+
+        let mut attributes = Vec::new();
+        for (slot, word) in TRACKED_SLOTS.iter().zip(words) {
+            attributes.extend(unpack_fields(slot, &bytes_from_hex(word)?, ChangeType::Creation));
+        }
+        Ok(attributes)
     }
 
     /// The balance inputs carried by the snapshot, used to seed the store and to report the
@@ -67,6 +61,26 @@ impl InitialState {
             )?,
         })
     }
+}
+
+/// Reports each value packed into `word` as its own attribute.
+///
+/// The packing rule lives here and nowhere else: consumers read `total_shares`, not a word they
+/// have to know how to split.
+pub fn unpack_fields(slot: &TrackedSlot, word: &[u8], change: ChangeType) -> Vec<Attribute> {
+    let word = BigInt::from_unsigned_bytes_be(word);
+    slot.fields
+        .iter()
+        .map(|field| {
+            let value = if field.width >= 256 {
+                word.clone()
+            } else {
+                let mask = (BigInt::one() << field.width) - BigInt::one();
+                (word.clone() >> field.offset) & mask
+            };
+            attribute_with_bytes(field.attribute, &value.to_bytes_be().1, change)
+        })
+        .collect()
 }
 
 /// Decodes a hex-encoded raw slot value into an unsigned `BigInt`.
@@ -192,6 +206,33 @@ mod tests {
         // stETH.getTotalShares() and the stVaults' share of them, at block 25603297.
         assert_eq!(big_int_from_u128(total_shares), big("7526667021904051320418763"));
         assert_eq!(big_int_from_u128(external_shares), big("3721126242498807385407"));
+    }
+
+    /// The snapshot's creation attributes must decode to the same values the chain holds, and
+    /// carry them under the names the simulation reads.
+    #[test]
+    fn creation_attributes_decode_to_the_chain_values() {
+        let attributes = snapshot()
+            .creation_attributes()
+            .expect("attributes");
+        let by_name: std::collections::HashMap<_, _> = attributes
+            .iter()
+            .map(|a| (a.name.as_str(), BigInt::from_unsigned_bytes_be(&a.value)))
+            .collect();
+
+        assert_eq!(by_name.len(), 11);
+        // stETH.getTotalShares() and the stVaults' share of it, at block 25603297.
+        assert_eq!(by_name["total_shares"], big("7526667021904051320418763"));
+        assert_eq!(by_name["external_shares"], big("3721126242498807385407"));
+        // stETH.getBufferedEther() and the deposits since the last oracle report.
+        assert_eq!(by_name["buffered_ether"], big("539569870340371095571"));
+        assert_eq!(by_name["deposited_post_report"], big("761440000000000000000000"));
+        assert_eq!(by_name["cl_validators_balance"], big("8567227049119653000000000"));
+        assert_eq!(by_name["cl_pending_balance"], big("0"));
+        // stETH.sharesOf(wstETH).
+        assert_eq!(by_name["wsteth_shares"], big("3628434125893615122886002"));
+        // getCurrentStakeLimit() is 150,000 ETH there, which is also the configured maximum.
+        assert_eq!(by_name["max_stake_limit"], big("150000000000000000000000"));
     }
 
     #[test]

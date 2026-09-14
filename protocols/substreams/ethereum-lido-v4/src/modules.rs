@@ -25,8 +25,8 @@ use crate::{
         CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY, ETH_ADDRESS, STETH_ADDRESS,
         STETH_COMPONENT_ID, TOTAL_AND_EXTERNAL_SHARES_KEY, TRACKED_SLOTS, WSTETH_ADDRESS,
     },
-    state::{BalanceState, InitialState},
-    utils::{attribute_with_bytes, bytes_from_hex},
+    state::{unpack_fields, BalanceState, InitialState},
+    utils::bytes_from_hex,
 };
 
 /// Creates the component on `start_block`, and nothing on any other block.
@@ -229,11 +229,11 @@ fn handle_state_updates(
 
                 builder.add_entity_change(&EntityChanges {
                     component_id: STETH_COMPONENT_ID.to_string(),
-                    attributes: vec![attribute_with_bytes(
-                        tracked.attribute,
+                    attributes: unpack_fields(
+                        tracked,
                         &storage_change.new_value,
                         ChangeType::Update,
-                    )],
+                    ),
                 });
 
                 if let Some(key) = tracked.balance_key {
@@ -324,7 +324,17 @@ mod tests {
     fn every_tracked_slot_resolves_to_its_own_row() {
         for slot in TRACKED_SLOTS.iter() {
             let found = tracked_slot(&slot.position).expect("declared slot resolves");
-            assert_eq!(found.attribute, slot.attribute);
+            let found_names: Vec<_> = found
+                .fields
+                .iter()
+                .map(|f| f.attribute)
+                .collect();
+            let want_names: Vec<_> = slot
+                .fields
+                .iter()
+                .map(|f| f.attribute)
+                .collect();
+            assert_eq!(found_names, want_names);
             assert_eq!(found.balance_key, slot.balance_key);
         }
     }
@@ -333,6 +343,35 @@ mod tests {
     fn untracked_positions_resolve_to_none() {
         assert!(tracked_slot(&[0u8; 32]).is_none());
         assert!(tracked_slot(&[]).is_none());
+    }
+
+    /// Every attribute name is unique across the whole table, so no two slots can report the
+    /// same name and silently overwrite one another.
+    #[test]
+    fn attribute_names_are_unique() {
+        let mut names: Vec<&str> = TRACKED_SLOTS
+            .iter()
+            .flat_map(|slot| slot.fields.iter().map(|f| f.attribute))
+            .collect();
+        let total = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), total, "duplicate attribute name in TRACKED_SLOTS");
+        assert_eq!(total, 11);
+    }
+
+    /// Each slot's fields tile its word without overlapping, so no bit is reported twice or
+    /// dropped between two attributes.
+    #[test]
+    fn packed_fields_tile_their_word() {
+        for slot in TRACKED_SLOTS.iter() {
+            let mut next = 0u32;
+            for field in slot.fields {
+                assert_eq!(field.offset, next, "gap or overlap before {}", field.attribute);
+                next = field.offset + field.width;
+            }
+            assert!(next <= 256, "slot overflows a word at {}", slot.fields[0].attribute);
+        }
     }
 
     /// The three inputs `BalanceState` reconstructs `totalPooledEther` from, and only those.

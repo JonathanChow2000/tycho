@@ -30,12 +30,19 @@ pub const STAKING_STATE_POSITION: [u8; 32] =
 pub const WSTETH_SHARES_POSITION: [u8; 32] =
     hex!("f37caed32e4e49c83636e0f1684f3f4a9a23c463a49eb17cd63abd50680b378b");
 
-pub const TOTAL_AND_EXTERNAL_SHARES_ATTR: &str = "total_and_external_shares";
-pub const BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR: &str =
-    "buffered_ether_and_deposited_post_report";
-pub const CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR: &str =
-    "cl_validators_balance_and_cl_pending_balance";
-pub const STAKING_STATE_ATTR: &str = "staking_state";
+// One attribute per value the protocol names, not per storage word: a consumer reading
+// `total_shares` does not have to know how Lido packs its slots, and the names survive a
+// relocation like the v3 -> v4 move.
+pub const TOTAL_SHARES_ATTR: &str = "total_shares";
+pub const EXTERNAL_SHARES_ATTR: &str = "external_shares";
+pub const BUFFERED_ETHER_ATTR: &str = "buffered_ether";
+pub const DEPOSITED_POST_REPORT_ATTR: &str = "deposited_post_report";
+pub const CL_VALIDATORS_BALANCE_ATTR: &str = "cl_validators_balance";
+pub const CL_PENDING_BALANCE_ATTR: &str = "cl_pending_balance";
+pub const PREV_STAKE_BLOCK_NUMBER_ATTR: &str = "prev_stake_block_number";
+pub const PREV_STAKE_LIMIT_ATTR: &str = "prev_stake_limit";
+pub const MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR: &str = "max_stake_limit_growth_blocks";
+pub const MAX_STAKE_LIMIT_ATTR: &str = "max_stake_limit";
 pub const WSTETH_SHARES_ATTR: &str = "wsteth_shares";
 
 /// Store keys holding the last seen raw value of each slot that feeds `totalPooledEther`, the
@@ -48,12 +55,19 @@ pub const BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY: &str =
 pub const CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY: &str =
     "cl_validators_balance_and_cl_pending_balance";
 
+/// One value packed into a storage word, as `(value >> offset) & (2^width - 1)`.
+pub struct PackedField {
+    pub attribute: &'static str,
+    pub offset: u32,
+    pub width: u32,
+}
+
 /// A stETH storage slot this package tracks.
 pub struct TrackedSlot {
     /// Raw storage position on the stETH contract.
     pub position: [u8; 32],
-    /// Component attribute the raw slot value is reported as.
-    pub attribute: &'static str,
+    /// The values packed into the word, reported one attribute each.
+    pub fields: &'static [PackedField],
     /// Store key, for the slots that feed `totalPooledEther`. `None` for the slots that are
     /// reported as attributes but move no balance.
     pub balance_key: Option<&'static str>,
@@ -64,27 +78,42 @@ pub struct TrackedSlot {
 pub const TRACKED_SLOTS: [TrackedSlot; 5] = [
     TrackedSlot {
         position: TOTAL_AND_EXTERNAL_SHARES_POSITION,
-        attribute: TOTAL_AND_EXTERNAL_SHARES_ATTR,
+        fields: &[
+            PackedField { attribute: TOTAL_SHARES_ATTR, offset: 0, width: 128 },
+            PackedField { attribute: EXTERNAL_SHARES_ATTR, offset: 128, width: 128 },
+        ],
         balance_key: Some(TOTAL_AND_EXTERNAL_SHARES_KEY),
     },
     TrackedSlot {
         position: BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_POSITION,
-        attribute: BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR,
+        fields: &[
+            PackedField { attribute: BUFFERED_ETHER_ATTR, offset: 0, width: 128 },
+            PackedField { attribute: DEPOSITED_POST_REPORT_ATTR, offset: 128, width: 128 },
+        ],
         balance_key: Some(BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY),
     },
     TrackedSlot {
         position: CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_POSITION,
-        attribute: CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR,
+        fields: &[
+            PackedField { attribute: CL_VALIDATORS_BALANCE_ATTR, offset: 0, width: 128 },
+            PackedField { attribute: CL_PENDING_BALANCE_ATTR, offset: 128, width: 128 },
+        ],
         balance_key: Some(CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY),
     },
+    // StakeLimitUtils packs four fields of two different widths into this one.
     TrackedSlot {
         position: STAKING_STATE_POSITION,
-        attribute: STAKING_STATE_ATTR,
+        fields: &[
+            PackedField { attribute: PREV_STAKE_BLOCK_NUMBER_ATTR, offset: 0, width: 32 },
+            PackedField { attribute: PREV_STAKE_LIMIT_ATTR, offset: 32, width: 96 },
+            PackedField { attribute: MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR, offset: 128, width: 32 },
+            PackedField { attribute: MAX_STAKE_LIMIT_ATTR, offset: 160, width: 96 },
+        ],
         balance_key: None,
     },
     TrackedSlot {
         position: WSTETH_SHARES_POSITION,
-        attribute: WSTETH_SHARES_ATTR,
+        fields: &[PackedField { attribute: WSTETH_SHARES_ATTR, offset: 0, width: 256 }],
         balance_key: None,
     },
 ];

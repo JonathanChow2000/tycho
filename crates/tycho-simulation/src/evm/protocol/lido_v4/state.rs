@@ -9,13 +9,13 @@ use tycho_common::{
     models::token::Token,
     simulation::{
         errors::{SimulationError, TransitionError},
-        protocol_sim::{Balances, GetAmountOutResult, ProtocolSim},
+        protocol_sim::{Balances, BlockContext, GetAmountOutResult, ProtocolSim},
     },
     Bytes,
 };
 
 use crate::evm::protocol::{
-    safe_math::{safe_add_u256, safe_mul_u256},
+    safe_math::{safe_add_u256, safe_mul_u256, safe_sub_u256},
     u256_num::{biguint_to_u256, u256_to_biguint, u256_to_f64},
 };
 
@@ -32,12 +32,18 @@ const ETH: &[u8] = &ETH_ADDRESS;
 const STETH: &[u8] = &STETH_ADDRESS;
 const WSTETH: &[u8] = &WSTETH_ADDRESS;
 
-pub const TOTAL_AND_EXTERNAL_SHARES_ATTR: &str = "total_and_external_shares";
-pub const BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR: &str =
-    "buffered_ether_and_deposited_post_report";
-pub const CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR: &str =
-    "cl_validators_balance_and_cl_pending_balance";
-pub const STAKING_STATE_ATTR: &str = "staking_state";
+// The package reports one attribute per value Lido names, so nothing here needs to know how
+// those values are packed into storage words.
+pub const TOTAL_SHARES_ATTR: &str = "total_shares";
+pub const EXTERNAL_SHARES_ATTR: &str = "external_shares";
+pub const BUFFERED_ETHER_ATTR: &str = "buffered_ether";
+pub const DEPOSITED_POST_REPORT_ATTR: &str = "deposited_post_report";
+pub const CL_VALIDATORS_BALANCE_ATTR: &str = "cl_validators_balance";
+pub const CL_PENDING_BALANCE_ATTR: &str = "cl_pending_balance";
+pub const PREV_STAKE_BLOCK_NUMBER_ATTR: &str = "prev_stake_block_number";
+pub const PREV_STAKE_LIMIT_ATTR: &str = "prev_stake_limit";
+pub const MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR: &str = "max_stake_limit_growth_blocks";
+pub const MAX_STAKE_LIMIT_ATTR: &str = "max_stake_limit";
 pub const WSTETH_SHARES_ATTR: &str = "wsteth_shares";
 
 const UINT128_MAX_EXCLUSIVE: u128 = u128::MAX;
@@ -52,8 +58,12 @@ const UNWRAP_GAS: u64 = 66_000;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LidoV4State {
-    block_number: u64,
-    block_timestamp: u64,
+    /// Height of the block a quote is expected to execute in, maintained by `apply_block`.
+    ///
+    /// The stake limit accrues per block, so this has to follow the chain head rather than the
+    /// last block Lido itself was observed in - stETH storage moves on a minority of blocks, and
+    /// on the rest the limit would otherwise stop growing.
+    execution_block_number: u64,
     total_shares: U256,
     external_shares: U256,
     buffered_ether: U256,
@@ -67,6 +77,15 @@ pub struct LidoV4State {
     wsteth_shares: U256,
 }
 
+/// Lido stores amounts as uint128 or narrower, so anything wider is a malformed input rather
+/// than a trade the venue could serve.
+fn validate_u128_bound(name: &str, value: U256) -> Result<(), SimulationError> {
+    if value >= U256::from(UINT128_MAX_EXCLUSIVE) {
+        return Err(SimulationError::InvalidInput(format!("{name} exceeds uint128 bound"), None));
+    }
+    Ok(())
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StakingState {
     prev_stake_block_number: u32,
@@ -78,8 +97,7 @@ pub struct StakingState {
 impl LidoV4State {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        block_number: u64,
-        block_timestamp: u64,
+        execution_block_number: u64,
         total_shares: U256,
         external_shares: U256,
         buffered_ether: U256,
@@ -90,8 +108,7 @@ impl LidoV4State {
         wsteth_shares: U256,
     ) -> Self {
         Self {
-            block_number,
-            block_timestamp,
+            execution_block_number,
             total_shares,
             external_shares,
             buffered_ether,
@@ -101,21 +118,6 @@ impl LidoV4State {
             staking_state,
             wsteth_shares,
         }
-    }
-
-    pub(crate) fn split_low_high_u128(value: U256) -> (U256, U256) {
-        let mask = U256::from(u128::MAX);
-        (value & mask, (value >> 128u32) & mask)
-    }
-
-    fn validate_u128_bound(name: &str, value: U256) -> Result<(), SimulationError> {
-        if value >= U256::from(UINT128_MAX_EXCLUSIVE) {
-            return Err(SimulationError::InvalidInput(
-                format!("{name} exceeds uint128 bound"),
-                None,
-            ));
-        }
-        Ok(())
     }
 
     fn internal_shares(&self) -> Result<U256, SimulationError> {
@@ -138,7 +140,7 @@ impl LidoV4State {
     }
 
     fn shares_for_pooled_eth(&self, eth_amount: U256) -> Result<U256, SimulationError> {
-        Self::validate_u128_bound("eth amount", eth_amount)?;
+        validate_u128_bound("eth amount", eth_amount)?;
         let denominator = self.internal_shares()?;
         let numerator = self.internal_ether();
         if denominator.is_zero() || numerator.is_zero() {
@@ -148,7 +150,7 @@ impl LidoV4State {
     }
 
     fn pooled_eth_by_shares(&self, shares_amount: U256) -> Result<U256, SimulationError> {
-        Self::validate_u128_bound("shares amount", shares_amount)?;
+        validate_u128_bound("shares amount", shares_amount)?;
         let numerator = self.internal_ether();
         let denominator = self.internal_shares()?;
         if denominator.is_zero() || numerator.is_zero() {
@@ -165,7 +167,7 @@ impl LidoV4State {
         let mut new_state = self.clone();
         new_state
             .staking_state
-            .decrease(amount_in, new_state.block_number)?;
+            .decrease(amount_in, new_state.execution_block_number)?;
         new_state.total_shares = safe_add_u256(new_state.total_shares, shares_amount)?;
         new_state.buffered_ether = safe_add_u256(new_state.buffered_ether, amount_in)?;
         let amount_out = new_state.pooled_eth_by_shares(shares_amount)?;
@@ -181,10 +183,13 @@ impl LidoV4State {
         amount_in: U256,
     ) -> Result<GetAmountOutResult, SimulationError> {
         let amount_out = self.shares_for_pooled_eth(amount_in)?;
+        // `wrap` pulls the stETH into the wrapper, so the shares it holds grow by what it minted.
+        let mut new_state = self.clone();
+        new_state.wsteth_shares = safe_add_u256(new_state.wsteth_shares, amount_out)?;
         Ok(GetAmountOutResult::new(
             u256_to_biguint(amount_out),
             BigUint::from(WRAP_GAS),
-            self.clone_box(),
+            Box::new(new_state),
         ))
     }
 
@@ -198,7 +203,7 @@ impl LidoV4State {
         let mut new_state = self.clone();
         new_state
             .staking_state
-            .decrease(amount_in, new_state.block_number)?;
+            .decrease(amount_in, new_state.execution_block_number)?;
         new_state.total_shares = safe_add_u256(new_state.total_shares, shares_amount)?;
         new_state.buffered_ether = safe_add_u256(new_state.buffered_ether, amount_in)?;
         // The submitted stETH lands on the wrapper, so its share balance grows with the mint.
@@ -222,24 +227,30 @@ impl LidoV4State {
             return Err(SimulationError::RecoverableError("WRAPPER_BALANCE_EXCEEDED".to_string()));
         }
         let amount_out = self.pooled_eth_by_shares(amount_in)?;
+        // `unwrap` burns the caller's wstETH and sends the stETH out, so the wrapper holds that
+        // many fewer shares - which is exactly the bound above, so it has to move with it.
+        let mut new_state = self.clone();
+        new_state.wsteth_shares = safe_sub_u256(new_state.wsteth_shares, amount_in)?;
         Ok(GetAmountOutResult::new(
             u256_to_biguint(amount_out),
             BigUint::from(UNWRAP_GAS),
-            self.clone_box(),
+            Box::new(new_state),
         ))
     }
 }
 
 impl StakingState {
-    pub(crate) fn from_u256(value: U256) -> Self {
-        let mask_32 = U256::from(u32::MAX);
-        let mask_96 = (U256::from(1u8) << 96u32) - U256::ONE;
-
+    pub(crate) fn new(
+        prev_stake_block_number: u32,
+        prev_stake_limit: U256,
+        max_stake_limit_growth_blocks: u32,
+        max_stake_limit: U256,
+    ) -> Self {
         Self {
-            prev_stake_block_number: (value & mask_32).to::<u32>(),
-            prev_stake_limit: (value >> 32u32) & mask_96,
-            max_stake_limit_growth_blocks: ((value >> 128u32) & mask_32).to::<u32>(),
-            max_stake_limit: (value >> 160u32) & mask_96,
+            prev_stake_block_number,
+            prev_stake_limit,
+            max_stake_limit_growth_blocks,
+            max_stake_limit,
         }
     }
 
@@ -337,6 +348,12 @@ impl ProtocolSim for LidoV4State {
         token_out: &Token,
     ) -> Result<GetAmountOutResult, SimulationError> {
         let amount_in = biguint_to_u256(&amount_in);
+        // Every direction reverts on a zero amount: `submit` with ZERO_DEPOSIT, and the wrapper
+        // with its own zero-amount guards. Quoting a zero output would report the trade as
+        // settling for nothing rather than as not settling.
+        if amount_in.is_zero() {
+            return Err(SimulationError::RecoverableError("ZERO_AMOUNT".to_string()));
+        }
 
         match (token_in.address.as_ref(), token_out.address.as_ref()) {
             (ETH, STETH) => self.amount_out_eth_to_steth(amount_in),
@@ -358,7 +375,7 @@ impl ProtocolSim for LidoV4State {
             (ETH, STETH) => {
                 let max_sell = self
                     .staking_state
-                    .current_limit(self.block_number)
+                    .current_limit(self.execution_block_number)
                     .min(max_input);
                 if max_sell.is_zero() {
                     return Ok((BigUint::ZERO, BigUint::ZERO));
@@ -395,7 +412,7 @@ impl ProtocolSim for LidoV4State {
                 // as it bounds ETH -> stETH.
                 let max_sell = self
                     .staking_state
-                    .current_limit(self.block_number)
+                    .current_limit(self.execution_block_number)
                     .min(max_input);
                 if max_sell.is_zero() {
                     return Ok((BigUint::ZERO, BigUint::ZERO));
@@ -419,58 +436,67 @@ impl ProtocolSim for LidoV4State {
         _tokens: &HashMap<Bytes, Token>,
         _balances: &Balances,
     ) -> Result<(), TransitionError> {
-        if let Some(block_number) = delta
-            .updated_attributes
-            .get("block_number")
-        {
-            self.block_number = U256::from_be_slice(block_number).to::<u64>();
+        let read = |name: &str| -> Option<U256> {
+            delta
+                .updated_attributes
+                .get(name)
+                .map(|value| U256::from_be_slice(value))
+        };
+
+        if let Some(value) = read(TOTAL_SHARES_ATTR) {
+            self.total_shares = value;
         }
-        if let Some(block_timestamp) = delta
-            .updated_attributes
-            .get("block_timestamp")
-        {
-            self.block_timestamp = U256::from_be_slice(block_timestamp).to::<u64>();
+        if let Some(value) = read(EXTERNAL_SHARES_ATTR) {
+            self.external_shares = value;
         }
-        if let Some(total_and_external_shares) = delta
-            .updated_attributes
-            .get(TOTAL_AND_EXTERNAL_SHARES_ATTR)
-        {
-            let (total_shares, external_shares) =
-                Self::split_low_high_u128(U256::from_be_slice(total_and_external_shares));
-            self.total_shares = total_shares;
-            self.external_shares = external_shares;
+        if let Some(value) = read(BUFFERED_ETHER_ATTR) {
+            self.buffered_ether = value;
         }
-        if let Some(buffered_and_deposited) = delta
-            .updated_attributes
-            .get(BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR)
-        {
-            let (buffered_ether, deposited_post_report) =
-                Self::split_low_high_u128(U256::from_be_slice(buffered_and_deposited));
-            self.buffered_ether = buffered_ether;
-            self.deposited_post_report = deposited_post_report;
+        if let Some(value) = read(DEPOSITED_POST_REPORT_ATTR) {
+            self.deposited_post_report = value;
         }
-        if let Some(wsteth_shares) = delta
-            .updated_attributes
-            .get(WSTETH_SHARES_ATTR)
-        {
-            self.wsteth_shares = U256::from_be_slice(wsteth_shares);
+        if let Some(value) = read(CL_VALIDATORS_BALANCE_ATTR) {
+            self.cl_validators_balance = value;
         }
-        if let Some(cl_balances) = delta
-            .updated_attributes
-            .get(CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR)
-        {
-            let (cl_validators_balance, cl_pending_balance) =
-                Self::split_low_high_u128(U256::from_be_slice(cl_balances));
-            self.cl_validators_balance = cl_validators_balance;
-            self.cl_pending_balance = cl_pending_balance;
+        if let Some(value) = read(CL_PENDING_BALANCE_ATTR) {
+            self.cl_pending_balance = value;
         }
-        if let Some(staking_state) = delta
-            .updated_attributes
-            .get(STAKING_STATE_ATTR)
-        {
-            self.staking_state = StakingState::from_u256(U256::from_be_slice(staking_state));
+        if let Some(value) = read(WSTETH_SHARES_ATTR) {
+            self.wsteth_shares = value;
+        }
+        if let Some(value) = read(PREV_STAKE_BLOCK_NUMBER_ATTR) {
+            self.staking_state
+                .prev_stake_block_number = value.to::<u32>();
+        }
+        if let Some(value) = read(PREV_STAKE_LIMIT_ATTR) {
+            self.staking_state.prev_stake_limit = value;
+        }
+        if let Some(value) = read(MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR) {
+            self.staking_state
+                .max_stake_limit_growth_blocks = value.to::<u32>();
+        }
+        if let Some(value) = read(MAX_STAKE_LIMIT_ATTR) {
+            self.staking_state.max_stake_limit = value;
         }
         Ok(())
+    }
+
+    /// Advances to the block a quote would execute in, so the stake limit keeps accruing on the
+    /// blocks where Lido's own storage did not move.
+    ///
+    /// Re-emits only when the resolved limit actually changed: a repeated block short-circuits,
+    /// and once the limit has settled at `max_stake_limit` further blocks cost one virtual call
+    /// and no clone.
+    fn apply_block(&mut self, block: &BlockContext) -> bool {
+        let number = block.number();
+        if number == self.execution_block_number {
+            return false;
+        }
+        let limit_before = self
+            .staking_state
+            .current_limit(self.execution_block_number);
+        self.execution_block_number = number;
+        limit_before != self.staking_state.current_limit(number)
     }
 
     fn query_pool_swap(
@@ -542,7 +568,6 @@ mod tests {
     fn sample_state() -> LidoV4State {
         LidoV4State::new(
             24_083_113,
-            1_744_791_234,
             U256::from_str_radix("6696604823358181328750512", 10).unwrap(),
             U256::from_str_radix("80758346894447149184", 10).unwrap(),
             U256::from_str_radix("658338852056838456032283", 10).unwrap(),
@@ -559,45 +584,25 @@ mod tests {
         U256::from_str_radix("2960000000000000000000000", 10).unwrap()
     }
 
-    fn staking_state_raw(state: StakingState) -> U256 {
-        U256::from(state.prev_stake_block_number) |
-            (state.prev_stake_limit << 32u32) |
-            (U256::from(state.max_stake_limit_growth_blocks) << 128u32) |
-            (state.max_stake_limit << 160u32)
-    }
-
     fn snapshot() -> tycho_client::feed::synchronizer::ComponentWithState {
         let state = sample_state();
-        let mut attributes = HashMap::from([
-            (
-                TOTAL_AND_EXTERNAL_SHARES_ATTR.to_string(),
-                Bytes::from(
-                    (state.total_shares | (state.external_shares << 128u32)).to_be_bytes_vec(),
-                ),
-            ),
-            (
-                BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR.to_string(),
-                Bytes::from(
-                    (state.buffered_ether | (state.deposited_post_report << 128u32))
-                        .to_be_bytes_vec(),
-                ),
-            ),
-            (
-                CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR.to_string(),
-                Bytes::from(
-                    (state.cl_validators_balance | (state.cl_pending_balance << 128u32))
-                        .to_be_bytes_vec(),
-                ),
-            ),
-        ]);
-        attributes.insert(
-            WSTETH_SHARES_ATTR.to_string(),
-            Bytes::from(sample_wsteth_shares().to_be_bytes_vec()),
-        );
-        attributes.insert(
-            STAKING_STATE_ATTR.to_string(),
-            Bytes::from(staking_state_raw(sample_staking_state()).to_be_bytes_vec()),
-        );
+        let staking = sample_staking_state();
+        let attributes: HashMap<String, Bytes> = [
+            (TOTAL_SHARES_ATTR, state.total_shares),
+            (EXTERNAL_SHARES_ATTR, state.external_shares),
+            (BUFFERED_ETHER_ATTR, state.buffered_ether),
+            (DEPOSITED_POST_REPORT_ATTR, state.deposited_post_report),
+            (CL_VALIDATORS_BALANCE_ATTR, state.cl_validators_balance),
+            (CL_PENDING_BALANCE_ATTR, state.cl_pending_balance),
+            (WSTETH_SHARES_ATTR, sample_wsteth_shares()),
+            (PREV_STAKE_BLOCK_NUMBER_ATTR, U256::from(staking.prev_stake_block_number)),
+            (PREV_STAKE_LIMIT_ATTR, staking.prev_stake_limit),
+            (MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR, U256::from(staking.max_stake_limit_growth_blocks)),
+            (MAX_STAKE_LIMIT_ATTR, staking.max_stake_limit),
+        ]
+        .into_iter()
+        .map(|(name, value)| (name.to_string(), Bytes::from(value.to_be_bytes_vec())))
+        .collect();
         let component_id = STETH_COMPONENT_ID.to_string();
 
         tycho_client::feed::synchronizer::ComponentWithState {
@@ -621,22 +626,6 @@ mod tests {
             component_tvl: None,
             entrypoints: Vec::new(),
         }
-    }
-
-    #[test]
-    fn split_low_high_u128_decodes_packed_slots() {
-        let low = U256::from(123u64);
-        let high = U256::from(456u64);
-        let packed = low | (high << 128u32);
-        let decoded = LidoV4State::split_low_high_u128(packed);
-        assert_eq!(decoded, (low, high));
-    }
-
-    #[test]
-    fn staking_state_from_u256_decodes_fields() {
-        let raw = staking_state_raw(sample_staking_state());
-        let decoded = StakingState::from_u256(raw);
-        assert_eq!(decoded, sample_staking_state());
     }
 
     /// One component carries every attribute, so the decoded state is complete for all four
@@ -690,38 +679,93 @@ mod tests {
         assert!(new_state.total_shares > state.total_shares);
         let old_limit = state
             .staking_state
-            .current_limit(state.block_number);
+            .current_limit(state.execution_block_number);
         let new_limit = new_state
             .staking_state
-            .current_limit(new_state.block_number);
+            .current_limit(new_state.execution_block_number);
         assert!(new_limit < old_limit);
     }
 
+    /// Both legs move the stETH the wrapper holds, and that balance is what bounds unwrapping,
+    /// so a consumer walking the returned state has to see it change.
     #[test]
-    fn steth_to_wsteth_and_back_keeps_state_constant() {
+    fn wrapping_and_unwrapping_move_the_wrapper_shares() {
         let state = sample_state();
         let amount_in = BigUint::from(10u64).pow(18);
 
         let wrap = state
             .get_amount_out(amount_in.clone(), &steth_token(), &wsteth_token())
-            .unwrap();
-        let wrapped_state = wrap
+            .expect("wrap");
+        let wrapped = wrap
             .new_state
             .as_any()
             .downcast_ref::<LidoV4State>()
             .unwrap();
-        assert_eq!(wrapped_state, &state);
+        // `wrap` pulls the stETH in, so the wrapper holds the shares it just minted on top.
+        assert_eq!(wrapped.wsteth_shares, state.wsteth_shares + biguint_to_u256(&wrap.amount));
 
         let unwrap = state
-            .get_amount_out(amount_in, &wsteth_token(), &steth_token())
-            .unwrap();
-        let unwrapped_state = unwrap
+            .get_amount_out(amount_in.clone(), &wsteth_token(), &steth_token())
+            .expect("unwrap");
+        let unwrapped = unwrap
             .new_state
             .as_any()
             .downcast_ref::<LidoV4State>()
             .unwrap();
-        assert_eq!(unwrapped_state, &state);
-        assert!(unwrap.amount > BigUint::ZERO);
+        // `unwrap` burns the caller's wstETH and sends the stETH back out.
+        assert_eq!(unwrapped.wsteth_shares, state.wsteth_shares - biguint_to_u256(&amount_in));
+    }
+
+    /// Draining the wrapper has to close the direction, not leave the bound where it started.
+    #[test]
+    fn unwrapping_the_whole_wrapper_closes_the_direction() {
+        let state = sample_state();
+        let (max_in, _) = state
+            .get_limits(Bytes::from(WSTETH_ADDRESS), Bytes::from(STETH_ADDRESS))
+            .expect("limits");
+
+        let drained = state
+            .get_amount_out(max_in.clone(), &wsteth_token(), &steth_token())
+            .expect("drain");
+        let drained = drained
+            .new_state
+            .as_any()
+            .downcast_ref::<LidoV4State>()
+            .unwrap();
+
+        assert_eq!(drained.wsteth_shares, U256::ZERO);
+        assert_eq!(
+            drained
+                .get_limits(Bytes::from(WSTETH_ADDRESS), Bytes::from(STETH_ADDRESS))
+                .expect("limits"),
+            (BigUint::ZERO, BigUint::ZERO)
+        );
+        // And a second full unwrap is refused rather than quoted again.
+        assert!(drained
+            .get_amount_out(max_in, &wsteth_token(), &steth_token())
+            .is_err());
+    }
+
+    /// Every direction reverts on chain at a zero amount.
+    #[test]
+    fn zero_amount_is_refused_in_every_direction() {
+        let state = sample_state();
+        for (token_in, token_out) in [
+            (eth_token(), steth_token()),
+            (eth_token(), wsteth_token()),
+            (steth_token(), wsteth_token()),
+            (wsteth_token(), steth_token()),
+        ] {
+            let err = state
+                .get_amount_out(BigUint::ZERO, &token_in, &token_out)
+                .unwrap_err();
+            assert!(
+                matches!(err, SimulationError::RecoverableError(ref m) if m == "ZERO_AMOUNT"),
+                "{} -> {} quoted a zero amount",
+                token_in.symbol,
+                token_out.symbol
+            );
+        }
     }
 
     #[test]
@@ -753,7 +797,7 @@ mod tests {
         let mut staking_state = state.staking_state;
         // Capacity gone, but the pair still has a rate: the limit bounds size, not price.
         staking_state.prev_stake_limit = U256::ZERO;
-        staking_state.prev_stake_block_number = state.block_number as u32;
+        staking_state.prev_stake_block_number = state.execution_block_number as u32;
         staking_state.max_stake_limit_growth_blocks = 0;
         state.staking_state = staking_state;
 
@@ -866,7 +910,7 @@ mod tests {
             u256_to_biguint(
                 state
                     .staking_state
-                    .current_limit(state.block_number)
+                    .current_limit(state.execution_block_number)
             )
         );
         assert!(max_out > BigUint::ZERO);
@@ -909,29 +953,56 @@ mod tests {
                 ProtocolStateDelta {
                     component_id: STETH_COMPONENT_ID.to_string(),
                     updated_attributes: HashMap::from([
-                        ("block_number".to_string(), Bytes::from(88u64.to_be_bytes().to_vec())),
-                        ("block_timestamp".to_string(), Bytes::from(99u64.to_be_bytes().to_vec())),
+                        (TOTAL_SHARES_ATTR.to_string(), Bytes::from(new_total.to_be_bytes_vec())),
                         (
-                            TOTAL_AND_EXTERNAL_SHARES_ATTR.to_string(),
-                            Bytes::from((new_total | (new_external << 128u32)).to_be_bytes_vec()),
+                            EXTERNAL_SHARES_ATTR.to_string(),
+                            Bytes::from(new_external.to_be_bytes_vec()),
                         ),
                         (
-                            BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR.to_string(),
+                            BUFFERED_ETHER_ATTR.to_string(),
+                            Bytes::from(new_buffered.to_be_bytes_vec()),
+                        ),
+                        (
+                            DEPOSITED_POST_REPORT_ATTR.to_string(),
+                            Bytes::from(new_deposited_post_report.to_be_bytes_vec()),
+                        ),
+                        (
+                            CL_VALIDATORS_BALANCE_ATTR.to_string(),
+                            Bytes::from(new_cl_validators_balance.to_be_bytes_vec()),
+                        ),
+                        (
+                            CL_PENDING_BALANCE_ATTR.to_string(),
+                            Bytes::from(new_cl_pending_balance.to_be_bytes_vec()),
+                        ),
+                        (
+                            PREV_STAKE_BLOCK_NUMBER_ATTR.to_string(),
                             Bytes::from(
-                                (new_buffered | (new_deposited_post_report << 128u32))
+                                U256::from(new_staking_state.prev_stake_block_number)
                                     .to_be_bytes_vec(),
                             ),
                         ),
                         (
-                            CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR.to_string(),
+                            PREV_STAKE_LIMIT_ATTR.to_string(),
                             Bytes::from(
-                                (new_cl_validators_balance | (new_cl_pending_balance << 128u32))
+                                new_staking_state
+                                    .prev_stake_limit
                                     .to_be_bytes_vec(),
                             ),
                         ),
                         (
-                            STAKING_STATE_ATTR.to_string(),
-                            Bytes::from(staking_state_raw(new_staking_state).to_be_bytes_vec()),
+                            MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR.to_string(),
+                            Bytes::from(
+                                U256::from(new_staking_state.max_stake_limit_growth_blocks)
+                                    .to_be_bytes_vec(),
+                            ),
+                        ),
+                        (
+                            MAX_STAKE_LIMIT_ATTR.to_string(),
+                            Bytes::from(
+                                new_staking_state
+                                    .max_stake_limit
+                                    .to_be_bytes_vec(),
+                            ),
                         ),
                     ]),
                     deleted_attributes: Default::default(),
@@ -941,8 +1012,6 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(state.block_number, 88);
-        assert_eq!(state.block_timestamp, 99);
         assert_eq!(state.total_shares, new_total);
         assert_eq!(state.external_shares, new_external);
         assert_eq!(state.buffered_ether, new_buffered);
@@ -1012,7 +1081,7 @@ mod tests {
             u256_to_biguint(
                 state
                     .staking_state
-                    .current_limit(state.block_number)
+                    .current_limit(state.execution_block_number)
             )
         );
         assert!(max_out > BigUint::ZERO);
@@ -1108,7 +1177,6 @@ mod tests {
     fn share_rate_matches_chain_on_the_v4_storage_layout() {
         let state = LidoV4State::new(
             25_603_297,
-            1_784_904_479,
             U256::from_str_radix("7526667021904051320418763", 10).unwrap(),
             U256::from_str_radix("3721126242498807385407", 10).unwrap(),
             U256::from_str_radix("539569870340371095571", 10).unwrap(),
@@ -1135,7 +1203,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn decoder_uses_header_block_info() {
+    async fn decoder_seeds_the_execution_block_from_the_header() {
         let snapshot = snapshot();
         let state = LidoV4State::try_from_with_header(
             snapshot,
@@ -1154,7 +1222,55 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(state.block_number, 123);
-        assert_eq!(state.block_timestamp, 456);
+        assert_eq!(state.execution_block_number, 123);
+    }
+
+    /// The stake limit accrues per block, so an idle block still has to move it - that is the
+    /// whole reason the block cannot come in on a delta.
+    #[test]
+    fn apply_block_accrues_the_stake_limit_without_a_delta() {
+        let mut state = sample_state();
+        // The fixture starts at `max_stake_limit`, where nothing can accrue. A partly consumed
+        // limit is the case this guards.
+        state.staking_state.prev_stake_limit = state.staking_state.max_stake_limit / U256::from(2);
+        let limit_before = state
+            .staking_state
+            .current_limit(state.execution_block_number);
+
+        let changed = state.apply_block(&BlockContext::new(state.execution_block_number + 1, 0));
+
+        assert!(changed, "an accruing limit must re-emit");
+        assert!(
+            state
+                .staking_state
+                .current_limit(state.execution_block_number) >
+                limit_before
+        );
+    }
+
+    #[test]
+    fn apply_block_is_idempotent_for_a_repeated_block() {
+        let mut state = sample_state();
+        let block = BlockContext::new(state.execution_block_number, 0);
+
+        assert!(!state.apply_block(&block));
+        assert!(!state.apply_block(&block));
+    }
+
+    /// Once the limit sits at `max_stake_limit` it cannot grow further, so later blocks must not
+    /// keep re-emitting the state to consumers.
+    #[test]
+    fn apply_block_does_not_re_emit_once_the_limit_is_saturated() {
+        let mut state = sample_state();
+        state.staking_state.prev_stake_limit = state.staking_state.max_stake_limit / U256::from(2);
+        state.apply_block(&BlockContext::new(state.execution_block_number + 10_000_000, 0));
+        let saturated = state
+            .staking_state
+            .current_limit(state.execution_block_number);
+        assert_eq!(saturated, state.staking_state.max_stake_limit);
+
+        let changed = state.apply_block(&BlockContext::new(state.execution_block_number + 1, 0));
+
+        assert!(!changed);
     }
 }
