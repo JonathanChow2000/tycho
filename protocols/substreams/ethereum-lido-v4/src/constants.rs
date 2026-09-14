@@ -1,7 +1,8 @@
 use substreams::hex;
 
-pub const STETH_COMPONENT_ID: &str = "0xae7ab96520de3a18e5e111b5eaab095312d7fe84";
-pub const WSTETH_COMPONENT_ID: &str = "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0";
+/// One component for the whole venue: stETH mints, and wstETH wraps, unwraps and mints through
+/// `receive()`. Keyed by stETH, the contract that holds the pool.
+pub const COMPONENT_ID: &str = "0xae7ab96520de3a18e5e111b5eaab095312d7fe84";
 
 pub const STETH_ADDRESS: [u8; 20] = hex!("ae7ab96520de3a18e5e111b5eaab095312d7fe84");
 pub const WSTETH_ADDRESS: [u8; 20] = hex!("7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0");
@@ -36,14 +37,13 @@ pub const CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR: &str =
     "cl_validators_balance_and_cl_pending_balance";
 pub const STAKING_STATE_ATTR: &str = "staking_state";
 pub const WSTETH_SHARES_ATTR: &str = "wsteth_shares";
-pub const TOKEN_TO_TRACK_TOTAL_POOLED_ETH_ATTR: &str = "token_to_track_total_pooled_eth";
 
-/// Store keys holding the last seen raw value of each slot that feeds a component balance. A block
-/// that touches one of them usually leaves the others untouched, so the latest value of each has
-/// to be carried across blocks.
+/// Store keys holding the last seen raw value of each slot that feeds `totalPooledEther`, the
+/// component's reported balance. A block that touches one of them usually leaves the others
+/// untouched, so the latest value of each has to be carried across blocks. `sharesOf(wstETH)` is
+/// not here: it bounds unwrapping but does not move the pool.
 pub const TOTAL_AND_EXTERNAL_SHARES_KEY: &str = "total_and_external_shares";
 pub const BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY: &str =
     "buffered_ether_and_deposited_post_report";
 pub const CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY: &str =
     "cl_validators_balance_and_cl_pending_balance";
-pub const WSTETH_SHARES_KEY: &str = "wsteth_shares";

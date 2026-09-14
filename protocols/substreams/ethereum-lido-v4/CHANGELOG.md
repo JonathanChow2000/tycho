@@ -3,32 +3,30 @@
 ## v0.1.0
 
 Initial Lido integration, on the storage layout Lido core v4.0.0 introduced at block 25603297.
-Indexes two components from raw stETH storage slots:
 
-- `stETH` (`0xae7a...fE84`) — ETH staking. One-directional: unstaking runs through the
-  asynchronous withdrawal queue, so there is no stETH -> ETH quote.
-- `wstETH` (`0x7f39...2Ca0`) — stETH wrap and unwrap, plus ETH -> wstETH: the wrapper's
-  `receive()` stakes through `stETH.submit` and mints the shares in one call, which saves the
-  hop through stETH. That direction is bounded by the same stake limit as a plain submit, so the
-  component tracks the stake limit too.
+One component (`0xae7a...fE84`, the stETH contract) covers the whole venue and serves four
+directions:
 
-Both contracts predate the package, so the module graph does not discover them from a creation
-event. The manifest carries a state snapshot in `params` and the components are created at
+- `ETH -> stETH` — staking through `LiquidityPool.submit`.
+- `stETH <-> wstETH` — wrap and unwrap.
+- `ETH -> wstETH` — wstETH's `receive()` stakes and wraps in one call, which saves the hop
+  through stETH.
+
+Unstaking runs through the asynchronous withdrawal queue, so `stETH -> ETH` and `wstETH -> ETH`
+report a zero limit. Keeping the venue in one component is what lets `ETH -> stETH` exist exactly
+once: split across two components, the one that cannot perform it would advertise it anyway.
+
+The contracts predate the package, so the module graph does not discover them from a creation
+event. The manifest carries a state snapshot in `params` and the component is created at
 `start_block`; regenerate the snapshot for a different start block with
 `scripts/compute_initial_state.sh`. The snapshot has to be taken at or after block 25603297:
 Lido v4 (Staking Router v3, LIP-35) moved the pooled-ether accounting from validator counts to
 balances and zeroed the slots the previous layout used.
 
-Component balances are reported as absolute values on every transaction that moves one of the
-inputs:
-
-- the stETH component reports `getTotalPooledEther()` in ETH: `bufferedEther +
-  clValidatorsBalance + clPendingBalance + depositedPostReport`, plus the ether backing the
-  external (stVaults) shares at the same share rate;
-- the wstETH component reports the stETH locked in the wrapper
-  (`sharesOf(wstETH) * totalPooledEther / totalShares`, i.e. `stETH.balanceOf(wstETH)`), which
-  is its tradable liquidity. Reporting the pool total here would overstate it ~2x and
-  double-count the protocol's TVL.
+The component reports one absolute balance, `getTotalPooledEther()` in ETH: `bufferedEther +
+clValidatorsBalance + clPendingBalance + depositedPostReport`, plus the ether backing the
+external (stVaults) shares at the same share rate. The stETH the wrapper holds is already inside
+that figure, so reporting it as well would count the same ether twice.
 
 Carrying those inputs across blocks needs a `store_balance_slots` store module: a block that
 touches one of the tracked slots usually leaves the others untouched.

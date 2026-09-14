@@ -11,7 +11,6 @@ use crate::{
         CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR,
         CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY, STAKING_STATE_ATTR,
         TOTAL_AND_EXTERNAL_SHARES_ATTR, TOTAL_AND_EXTERNAL_SHARES_KEY, WSTETH_SHARES_ATTR,
-        WSTETH_SHARES_KEY,
     },
     utils::{attribute_with_bytes, bytes_from_hex},
 };
@@ -32,31 +31,26 @@ impl InitialState {
             .map_err(|e| anyhow!("Failed to parse Lido V4 initial state: {e}"))
     }
 
-    pub fn steth_creation_attributes(&self) -> Result<Vec<Attribute>> {
-        let mut attributes = self.shared_creation_attributes()?;
-        attributes.push(attribute_with_bytes(
-            STAKING_STATE_ATTR,
-            &bytes_from_hex(&self.staking_state)?,
-            ChangeType::Creation,
-        ));
-        Ok(attributes)
-    }
-
-    pub fn wsteth_creation_attributes(&self) -> Result<Vec<Attribute>> {
-        let mut attributes = self.shared_creation_attributes()?;
-        attributes.push(attribute_with_bytes(
-            WSTETH_SHARES_ATTR,
-            &bytes_from_hex(&self.wsteth_shares)?,
-            ChangeType::Creation,
-        ));
-        // ETH -> wstETH stakes through `stETH.submit`, so this component is bounded by the stake
-        // limit too.
-        attributes.push(attribute_with_bytes(
-            STAKING_STATE_ATTR,
-            &bytes_from_hex(&self.staking_state)?,
-            ChangeType::Creation,
-        ));
-        Ok(attributes)
+    /// Every tracked slot, since one component serves every direction.
+    pub fn creation_attributes(&self) -> Result<Vec<Attribute>> {
+        Ok(vec![
+            (TOTAL_AND_EXTERNAL_SHARES_ATTR, &self.total_and_external_shares),
+            (
+                BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR,
+                &self.buffered_ether_and_deposited_post_report,
+            ),
+            (
+                CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR,
+                &self.cl_validators_balance_and_cl_pending_balance,
+            ),
+            (STAKING_STATE_ATTR, &self.staking_state),
+            (WSTETH_SHARES_ATTR, &self.wsteth_shares),
+        ]
+        .into_iter()
+        .map(|(name, value)| {
+            Ok(attribute_with_bytes(name, &bytes_from_hex(value)?, ChangeType::Creation))
+        })
+        .collect::<Result<Vec<_>>>()?)
     }
 
     /// The balance inputs carried by the snapshot, used to seed the store and to report the
@@ -70,28 +64,7 @@ impl InitialState {
             cl_validators_balance_and_cl_pending_balance: big_int_from_hex(
                 &self.cl_validators_balance_and_cl_pending_balance,
             )?,
-            wsteth_shares: big_int_from_hex(&self.wsteth_shares)?,
         })
-    }
-
-    fn shared_creation_attributes(&self) -> Result<Vec<Attribute>> {
-        Ok(vec![
-            attribute_with_bytes(
-                TOTAL_AND_EXTERNAL_SHARES_ATTR,
-                &bytes_from_hex(&self.total_and_external_shares)?,
-                ChangeType::Creation,
-            ),
-            attribute_with_bytes(
-                BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR,
-                &bytes_from_hex(&self.buffered_ether_and_deposited_post_report)?,
-                ChangeType::Creation,
-            ),
-            attribute_with_bytes(
-                CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR,
-                &bytes_from_hex(&self.cl_validators_balance_and_cl_pending_balance)?,
-                ChangeType::Creation,
-            ),
-        ])
     }
 }
 
@@ -110,7 +83,6 @@ pub struct BalanceState {
     pub total_and_external_shares: BigInt,
     pub buffered_ether_and_deposited_post_report: BigInt,
     pub cl_validators_balance_and_cl_pending_balance: BigInt,
-    pub wsteth_shares: BigInt,
 }
 
 impl BalanceState {
@@ -151,25 +123,7 @@ impl BalanceState {
             self.buffered_ether_and_deposited_post_report = value;
         } else if key == CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY {
             self.cl_validators_balance_and_cl_pending_balance = value;
-        } else if key == WSTETH_SHARES_KEY {
-            self.wsteth_shares = value;
         }
-    }
-
-    pub fn total_shares(&self) -> BigInt {
-        let (total_shares, _external_shares) = split_low_high_u128(&self.total_and_external_shares);
-        big_int_from_u128(total_shares)
-    }
-
-    /// The stETH locked in the wstETH wrapper, which is the wstETH component's tradable
-    /// liquidity: `sharesOf(wstETH) * totalPooledEther / totalShares`, matching
-    /// `stETH.balanceOf(wstETH)`.
-    pub fn wsteth_steth_balance(&self) -> BigInt {
-        let total_shares = self.total_shares();
-        if total_shares.clone() == BigInt::zero() {
-            return BigInt::zero();
-        }
-        self.wsteth_shares.clone() * self.total_pooled_ether() / total_shares
     }
 }
 
@@ -230,8 +184,11 @@ mod tests {
         let state = snapshot()
             .balance_state()
             .expect("balance state");
+        let (total_shares, external_shares) = split_low_high_u128(&state.total_and_external_shares);
 
-        assert_eq!(state.total_shares(), big("7526667021904051320418763"));
+        // stETH.getTotalShares() and the stVaults' share of them, at block 25603297.
+        assert_eq!(big_int_from_u128(total_shares), big("7526667021904051320418763"));
+        assert_eq!(big_int_from_u128(external_shares), big("3721126242498807385407"));
     }
 
     #[test]
@@ -252,8 +209,8 @@ mod tests {
         let with_external = state.total_pooled_ether();
 
         // Keep totalShares, drop externalShares: what is left is the internal ether alone.
-        let total_shares = state.total_shares();
-        state.apply(TOTAL_AND_EXTERNAL_SHARES_KEY, total_shares);
+        let (total_shares, _) = split_low_high_u128(&state.total_and_external_shares);
+        state.apply(TOTAL_AND_EXTERNAL_SHARES_KEY, big_int_from_u128(total_shares));
 
         // bufferedEther + clValidatorsBalance + clPendingBalance + depositedPostReport at
         // block 25603297; the ~4,615 ETH gap is the stVaults' share of the pool.
@@ -262,40 +219,17 @@ mod tests {
     }
 
     #[test]
-    fn wsteth_balance_matches_chain() {
-        let state = snapshot()
-            .balance_state()
-            .expect("balance state");
-
-        // stETH.balanceOf(wstETH) at block 25603297 - the stETH locked in the wrapper, well
-        // below the pool total.
-        assert_eq!(state.wsteth_steth_balance(), big("4499621841408863271318368"));
-        assert!(state.wsteth_steth_balance() < state.total_pooled_ether());
-    }
-
-    #[test]
-    fn apply_updates_the_keyed_slot() {
+    fn apply_updates_only_the_keyed_slot() {
         let mut state = snapshot()
             .balance_state()
             .expect("balance state");
-        let before = state.wsteth_steth_balance();
+        let before = state.total_pooled_ether();
 
-        state.apply(WSTETH_SHARES_KEY, BigInt::zero());
+        state.apply(BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY, BigInt::zero());
 
-        assert_eq!(state.wsteth_steth_balance(), BigInt::zero());
-        assert!(before > BigInt::zero());
-        // Unrelated keys are untouched.
-        assert_eq!(state.total_pooled_ether(), big("9333821188342623875037049"));
-    }
-
-    #[test]
-    fn zero_total_shares_yields_zero_wsteth_balance() {
-        let mut state = snapshot()
-            .balance_state()
-            .expect("balance state");
-
-        state.apply(TOTAL_AND_EXTERNAL_SHARES_KEY, BigInt::zero());
-
-        assert_eq!(state.wsteth_steth_balance(), BigInt::zero());
+        // Dropping the buffered/deposited half lowers the pool by exactly that half ...
+        assert_eq!(state.total_pooled_ether() < before, true);
+        // ... and leaves the consensus-layer half in place.
+        assert!(state.total_pooled_ether() > BigInt::zero());
     }
 }

@@ -1,4 +1,4 @@
-//! Lido V4 indexing: the stETH staking pool and the wstETH wrapper.
+//! Lido V4 indexing: one component covering the stETH staking pool and the wstETH wrapper.
 //!
 //! Neither contract has a creation event to discover, so the manifest carries a storage snapshot
 //! in `params` and every later block is driven by raw stETH storage writes.
@@ -25,17 +25,16 @@ use crate::{
         BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_POSITION,
         CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR,
         CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY,
-        CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_POSITION, ETH_ADDRESS, STAKING_STATE_ATTR,
-        STAKING_STATE_POSITION, STETH_ADDRESS, STETH_COMPONENT_ID,
-        TOKEN_TO_TRACK_TOTAL_POOLED_ETH_ATTR, TOTAL_AND_EXTERNAL_SHARES_ATTR,
+        CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_POSITION, COMPONENT_ID, ETH_ADDRESS,
+        STAKING_STATE_ATTR, STAKING_STATE_POSITION, STETH_ADDRESS, TOTAL_AND_EXTERNAL_SHARES_ATTR,
         TOTAL_AND_EXTERNAL_SHARES_KEY, TOTAL_AND_EXTERNAL_SHARES_POSITION, WSTETH_ADDRESS,
-        WSTETH_COMPONENT_ID, WSTETH_SHARES_ATTR, WSTETH_SHARES_KEY, WSTETH_SHARES_POSITION,
+        WSTETH_SHARES_ATTR, WSTETH_SHARES_POSITION,
     },
     state::{BalanceState, InitialState},
     utils::attribute_with_bytes,
 };
 
-/// Creates the stETH and wstETH components on `start_block`, and nothing on any other block.
+/// Creates the component on `start_block`, and nothing on any other block.
 #[substreams::handlers::map]
 pub fn map_protocol_components(
     params: String,
@@ -55,25 +54,18 @@ pub fn map_protocol_components(
     Ok(BlockTransactionProtocolComponents {
         tx_components: vec![TransactionProtocolComponents {
             tx: Some(tx.into()),
-            components: create_components(),
+            components: vec![create_component()],
         }],
     })
 }
 
-/// Builds both components, each tagged with the token its `totalPooledEther` is denominated in.
-fn create_components() -> Vec<ProtocolComponent> {
-    vec![
-        ProtocolComponent::new(STETH_COMPONENT_ID)
-            .with_tokens(&[STETH_ADDRESS, ETH_ADDRESS])
-            .with_attributes(&[(TOKEN_TO_TRACK_TOTAL_POOLED_ETH_ATTR, ETH_ADDRESS.as_ref())])
-            .as_swap_type("lido_v4_pool", ImplementationType::Custom),
-        // ETH is a token here because wstETH's `receive()` stakes and wraps in one call, so the
-        // wrapper quotes ETH -> wstETH as well as stETH <-> wstETH.
-        ProtocolComponent::new(WSTETH_COMPONENT_ID)
-            .with_tokens(&[STETH_ADDRESS, WSTETH_ADDRESS, ETH_ADDRESS])
-            .with_attributes(&[(TOKEN_TO_TRACK_TOTAL_POOLED_ETH_ATTR, STETH_ADDRESS.as_ref())])
-            .as_swap_type("lido_v4_pool", ImplementationType::Custom),
-    ]
+/// One component for the whole venue. The four directions it serves - ETH -> stETH,
+/// stETH <-> wstETH and ETH -> wstETH - all run off the same share rate, and keeping them
+/// together means ETH -> stETH is not also offered by a second component that cannot perform it.
+fn create_component() -> ProtocolComponent {
+    ProtocolComponent::new(COMPONENT_ID)
+        .with_tokens(&[ETH_ADDRESS, STETH_ADDRESS, WSTETH_ADDRESS])
+        .as_swap_type("lido_v4_pool", ImplementationType::Custom)
 }
 
 /// Carries the latest raw value of every slot that feeds a component balance, so a block that
@@ -98,7 +90,6 @@ pub fn store_balance_slots(params: String, block: eth::v2::Block, store: StoreSe
             CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY,
             &seed.cl_validators_balance_and_cl_pending_balance,
         );
-        store.set(0, WSTETH_SHARES_KEY, &seed.wsteth_shares);
         return;
     }
 
@@ -134,8 +125,6 @@ fn balance_slot_key(slot: &[u8]) -> Option<&'static str> {
         Some(BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY)
     } else if slot == CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_POSITION {
         Some(CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY)
-    } else if slot == WSTETH_SHARES_POSITION {
-        Some(WSTETH_SHARES_KEY)
     } else {
         None
     }
@@ -178,8 +167,7 @@ pub fn map_protocol_changes(
     })
 }
 
-/// Registers both components on the activation transaction and seeds them from the manifest
-/// snapshot.
+/// Registers the component on the activation transaction and seeds it from the manifest snapshot.
 fn initialize_protocol_components(
     initial_state: &InitialState,
     protocol_components: BlockTransactionProtocolComponents,
@@ -204,12 +192,8 @@ fn initialize_protocol_components(
     }
 
     builder.add_entity_change(&EntityChanges {
-        component_id: STETH_COMPONENT_ID.to_string(),
-        attributes: initial_state.steth_creation_attributes()?,
-    });
-    builder.add_entity_change(&EntityChanges {
-        component_id: WSTETH_COMPONENT_ID.to_string(),
-        attributes: initial_state.wsteth_creation_attributes()?,
+        component_id: COMPONENT_ID.to_string(),
+        attributes: initial_state.creation_attributes()?,
     });
 
     add_balance_changes(builder, &initial_state.balance_state()?);
@@ -217,8 +201,7 @@ fn initialize_protocol_components(
     Ok(())
 }
 
-/// Turns stETH storage writes into per-transaction attribute and balance changes, routing each
-/// attribute to only the components its slot describes.
+/// Turns stETH storage writes into per-transaction attribute and balance changes.
 fn handle_state_updates(
     block: &eth::v2::Block,
     balance_deltas: &StoreDeltas,
@@ -242,7 +225,7 @@ fn handle_state_updates(
                 .iter()
                 .filter(|change| change.address == STETH_ADDRESS)
             {
-                let Some((attr_name, target)) = tracked_attribute(&storage_change.key) else {
+                let Some(attr_name) = tracked_attribute(&storage_change.key) else {
                     continue;
                 };
 
@@ -250,20 +233,8 @@ fn handle_state_updates(
                     .entry(tx.index as u64)
                     .or_insert_with(|| TransactionChangesBuilder::new(&(tx.into())));
 
-                if target == AttributeTarget::Both {
-                    builder.add_entity_change(&EntityChanges {
-                        component_id: STETH_COMPONENT_ID.to_string(),
-                        attributes: vec![attribute_with_bytes(
-                            attr_name,
-                            &storage_change.new_value,
-                            ChangeType::Update,
-                        )],
-                    });
-                }
-
-                // Every tracked slot describes the wrapper: it stakes, wraps and unwraps.
                 builder.add_entity_change(&EntityChanges {
-                    component_id: WSTETH_COMPONENT_ID.to_string(),
+                    component_id: COMPONENT_ID.to_string(),
                     attributes: vec![attribute_with_bytes(
                         attr_name,
                         &storage_change.new_value,
@@ -290,26 +261,17 @@ fn handle_state_updates(
     }
 }
 
-/// Reports both components' absolute balances.
+/// Reports the component's absolute balance: `getTotalPooledEther()` in ETH.
 ///
-/// The stETH component is backed by the whole staking pool, so it reports `totalPooledEther` in
-/// ETH. The wstETH component can only ever return the stETH locked in the wrapper, so it reports
-/// that, not the pool total - reporting the pool total for both would also double-count the
-/// protocol's TVL.
+/// That single figure is the whole protocol. The stETH the wrapper holds is already inside it, so
+/// reporting it as well would count the same ether twice.
 fn add_balance_changes(builder: &mut TransactionChangesBuilder, balances: &BalanceState) {
     builder.add_balance_change(&BalanceChange {
         token: ETH_ADDRESS.to_vec(),
         balance: balances
             .total_pooled_ether()
             .to_signed_bytes_be(),
-        component_id: STETH_COMPONENT_ID.as_bytes().to_vec(),
-    });
-    builder.add_balance_change(&BalanceChange {
-        token: STETH_ADDRESS.to_vec(),
-        balance: balances
-            .wsteth_steth_balance()
-            .to_signed_bytes_be(),
-        component_id: WSTETH_COMPONENT_ID.as_bytes().to_vec(),
+        component_id: COMPONENT_ID.as_bytes().to_vec(),
     });
 }
 
@@ -344,7 +306,6 @@ fn block_start_balance_state(
         cl_validators_balance_and_cl_pending_balance: value_for(
             CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY,
         ),
-        wsteth_shares: value_for(WSTETH_SHARES_KEY),
     }
 }
 
@@ -359,28 +320,18 @@ fn decode_store_value(bytes: &[u8]) -> BigInt {
         .unwrap_or_else(BigInt::zero)
 }
 
-/// Which components an attribute belongs to. The share rate, the pooled-ether accounting and the
-/// stake limit drive both components; only the wrapper's own share balance is specific to wstETH.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum AttributeTarget {
-    WstEthOnly,
-    Both,
-}
-
-/// The attribute a tracked stETH slot maps to, and the components it describes.
-fn tracked_attribute(slot: &[u8]) -> Option<(&'static str, AttributeTarget)> {
+/// The attribute a tracked stETH slot maps to.
+fn tracked_attribute(slot: &[u8]) -> Option<&'static str> {
     if slot == TOTAL_AND_EXTERNAL_SHARES_POSITION {
-        Some((TOTAL_AND_EXTERNAL_SHARES_ATTR, AttributeTarget::Both))
+        Some(TOTAL_AND_EXTERNAL_SHARES_ATTR)
     } else if slot == BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_POSITION {
-        Some((BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR, AttributeTarget::Both))
+        Some(BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR)
     } else if slot == CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_POSITION {
-        Some((CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR, AttributeTarget::Both))
+        Some(CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR)
     } else if slot == STAKING_STATE_POSITION {
-        // Both components stake: wstETH's `receive()` goes through `stETH.submit`, so the stake
-        // limit bounds ETH -> wstETH exactly as it bounds ETH -> stETH.
-        Some((STAKING_STATE_ATTR, AttributeTarget::Both))
+        Some(STAKING_STATE_ATTR)
     } else if slot == WSTETH_SHARES_POSITION {
-        Some((WSTETH_SHARES_ATTR, AttributeTarget::WstEthOnly))
+        Some(WSTETH_SHARES_ATTR)
     } else {
         None
     }
