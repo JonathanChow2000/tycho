@@ -1,7 +1,8 @@
 //! Lido V4 indexing: one component covering the stETH staking pool and the wstETH wrapper.
 //!
 //! Neither contract has a creation event to discover, so the manifest carries a storage snapshot
-//! in `params` and every later block is driven by raw stETH storage writes.
+//! in `params`, along with the transaction in `start_block` to anchor the component to. Every
+//! later block is driven by raw stETH storage writes.
 //!
 //! Handlers below are in manifest order.
 
@@ -31,7 +32,7 @@ use crate::{
         WSTETH_SHARES_ATTR, WSTETH_SHARES_POSITION,
     },
     state::{BalanceState, InitialState},
-    utils::attribute_with_bytes,
+    utils::{attribute_with_bytes, bytes_from_hex},
 };
 
 /// Creates the component on `start_block`, and nothing on any other block.
@@ -46,10 +47,17 @@ pub fn map_protocol_components(
         return Ok(BlockTransactionProtocolComponents { tx_components: vec![] });
     }
 
+    let creation_tx = bytes_from_hex(&initial_state.creation_tx)?;
     let tx = block
         .transactions()
-        .next()
-        .ok_or_else(|| anyhow!("Activation block has no transactions"))?;
+        .find(|tx| tx.hash == creation_tx)
+        .ok_or_else(|| {
+            anyhow!(
+                "Activation transaction {} not found in block {}",
+                initial_state.creation_tx,
+                block.number
+            )
+        })?;
 
     Ok(BlockTransactionProtocolComponents {
         tx_components: vec![TransactionProtocolComponents {
@@ -143,10 +151,7 @@ pub fn map_protocol_changes(
     let initial_state = InitialState::parse(&params)?;
     let mut transaction_changes: HashMap<u64, TransactionChangesBuilder> = HashMap::new();
 
-    if !protocol_components
-        .tx_components
-        .is_empty()
-    {
+    if block.number == initial_state.start_block {
         initialize_protocol_components(
             &initial_state,
             protocol_components,

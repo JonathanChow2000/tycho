@@ -66,6 +66,20 @@ cl_validators_balance_and_cl_pending_balance=$(read_storage "$STETH_PROXY" "$CL_
 staking_state=$(read_storage "$STETH_PROXY" "$STAKING_STATE_SLOT")
 wsteth_shares=$(read_storage "$STETH_PROXY" "$WSTETH_SHARES_SLOT")
 
+# The component has no creation event, so it is anchored to a transaction in the start block.
+# The first one that touches stETH is the meaningful anchor: at the v4 migration block that is
+# the DAO vote that ran finalizeUpgrade_v4.
+block_hex=$(printf '0x%x' "$BLOCK_NUMBER")
+creation_tx=$(
+  cast rpc eth_getLogs \
+    "{\"fromBlock\":\"$block_hex\",\"toBlock\":\"$block_hex\",\"address\":\"$STETH_PROXY\"}" \
+    --rpc-url "$RPC_URL" | sed -n 's/.*"transactionHash":"\(0x[0-9a-f]*\)".*/\1/p' | head -1
+)
+if [ -z "$creation_tx" ]; then
+  echo "Error: block $BLOCK_NUMBER has no stETH logs to anchor the component to." >&2
+  exit 1
+fi
+
 cat <<JSON
 {
   "start_block": $BLOCK_NUMBER,
@@ -73,6 +87,7 @@ cat <<JSON
   "buffered_ether_and_deposited_post_report": "$buffered_ether_and_deposited_post_report",
   "cl_validators_balance_and_cl_pending_balance": "$cl_validators_balance_and_cl_pending_balance",
   "staking_state": "$staking_state",
-  "wsteth_shares": "$wsteth_shares"
+  "wsteth_shares": "$wsteth_shares",
+  "creation_tx": "$creation_tx"
 }
 JSON

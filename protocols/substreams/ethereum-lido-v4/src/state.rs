@@ -23,6 +23,7 @@ pub struct InitialState {
     pub cl_validators_balance_and_cl_pending_balance: String,
     pub staking_state: String,
     pub wsteth_shares: String,
+    pub creation_tx: String,
 }
 
 impl InitialState {
@@ -33,7 +34,7 @@ impl InitialState {
 
     /// Every tracked slot, since one component serves every direction.
     pub fn creation_attributes(&self) -> Result<Vec<Attribute>> {
-        Ok(vec![
+        vec![
             (TOTAL_AND_EXTERNAL_SHARES_ATTR, &self.total_and_external_shares),
             (
                 BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR,
@@ -50,11 +51,11 @@ impl InitialState {
         .map(|(name, value)| {
             Ok(attribute_with_bytes(name, &bytes_from_hex(value)?, ChangeType::Creation))
         })
-        .collect::<Result<Vec<_>>>()?)
+        .collect::<Result<Vec<_>>>()
     }
 
     /// The balance inputs carried by the snapshot, used to seed the store and to report the
-    /// component balances on the activation block.
+    /// component balance on the activation block.
     pub fn balance_state(&self) -> Result<BalanceState> {
         Ok(BalanceState {
             total_and_external_shares: big_int_from_hex(&self.total_and_external_shares)?,
@@ -73,7 +74,7 @@ pub fn big_int_from_hex(value: &str) -> Result<BigInt> {
     Ok(BigInt::from_unsigned_bytes_be(&bytes_from_hex(value)?))
 }
 
-/// The raw slot values that determine the two components' balances.
+/// The raw slot values that determine the component's reported balance.
 ///
 /// stETH packs two scalars per slot: `buffered_ether` / `deposited_post_report` in one,
 /// `cl_validators_balance` / `cl_pending_balance` in another, and `total_shares` /
@@ -170,6 +171,8 @@ mod tests {
                 .to_string(),
             wsteth_shares: "0x000000000000000000000000000000000000000000030059cedfb0543bebad72"
                 .to_string(),
+            creation_tx: "0x297042b4e5fd41399634f124beec7afc37712bc3374c3419b72932caf52714aa"
+                .to_string(),
         }
     }
 
@@ -227,9 +230,9 @@ mod tests {
 
         state.apply(BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY, BigInt::zero());
 
-        // Dropping the buffered/deposited half lowers the pool by exactly that half ...
-        assert_eq!(state.total_pooled_ether() < before, true);
-        // ... and leaves the consensus-layer half in place.
+        // Dropping the buffered/deposited half lowers the pool ...
+        assert!(state.total_pooled_ether() < before);
+        // ... and leaves the consensus-layer half, which still carries most of it.
         assert!(state.total_pooled_ether() > BigInt::zero());
     }
 }
