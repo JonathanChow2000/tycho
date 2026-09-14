@@ -7,7 +7,7 @@
 
 use anyhow::{anyhow, Result};
 use itertools::Itertools;
-use std::collections::HashMap;
+use std::{cell::LazyCell, collections::HashMap};
 use substreams::{pb::substreams::StoreDeltas, prelude::*, scalar::BigInt};
 use substreams_ethereum::pb::eth;
 use tycho_substreams::{
@@ -223,7 +223,9 @@ fn handle_state_updates(
     balance_store: &StoreGetBigInt,
     transaction_changes: &mut HashMap<u64, TransactionChangesBuilder>,
 ) {
-    let mut balances = block_start_balance_state(balance_deltas, balance_store);
+    // Deferred: only four slots feed the balances and the consensus-layer one moves about once
+    // a day, so most blocks touch none of them and never read this.
+    let mut balances = LazyCell::new(|| block_start_balance_state(balance_deltas, balance_store));
 
     for tx in block.transactions() {
         let mut balance_slot_touched = false;
