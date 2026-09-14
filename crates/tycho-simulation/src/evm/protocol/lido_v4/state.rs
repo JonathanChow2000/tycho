@@ -423,10 +423,14 @@ impl ProtocolSim for LidoV4State {
                 Ok((u256_to_biguint(max_sell), max_buy))
             }
             // Staking is one-directional: unstaking goes through the asynchronous withdrawal
-            // queue, so stETH -> ETH and wstETH -> ETH have no quote. Report a zero limit rather
-            // than an error so callers skip the direction instead of treating the component as
-            // broken.
-            _ => Ok((BigUint::ZERO, BigUint::ZERO)),
+            // queue. A zero limit, not an error - the cluster test counts every `get_limits`
+            // error against the protocol, so erroring here would accrue failures forever for two
+            // directions the venue structurally cannot serve.
+            (STETH, ETH) | (WSTETH, ETH) => Ok((BigUint::ZERO, BigUint::ZERO)),
+            // Anything else is a token this component does not hold. Zero would claim the venue
+            // knows the pair and has no capacity; `spot_price` and `get_amount_out` already draw
+            // this line.
+            _ => Err(SimulationError::FatalError("unsupported swap".to_string())),
         }
     }
 
@@ -1145,6 +1149,21 @@ mod tests {
                 "{pair} does not quote"
             );
         }
+
+        // A token the component does not hold is a different answer from "no capacity".
+        let weth = Token::new(&Bytes::from([0xc0u8; 20]), "WETH", 18, 0, &[], Chain::Ethereum, 100);
+        assert!(
+            state
+                .get_limits(weth.address.clone(), steth_token().address.clone())
+                .is_err(),
+            "an unknown token reported a limit instead of an error"
+        );
+        assert!(state
+            .spot_price(&weth, &steth_token())
+            .is_err());
+        assert!(state
+            .get_amount_out(amount.clone(), &weth, &steth_token())
+            .is_err());
 
         for (token_in, token_out) in &untradable {
             let pair = format!("{} -> {}", token_in.symbol, token_out.symbol);
