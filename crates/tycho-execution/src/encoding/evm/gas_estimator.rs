@@ -95,10 +95,8 @@ pub const PROTOCOLS_OUTPUT_TO_ROUTER: &[&str] =
 
 /// Mainnet stETH, the only Lido input token whose leg the router has to approve. Lido is
 /// configured on mainnet only, so a plain constant is enough.
-const LIDO_STETH_ADDRESS: [u8; 20] = [
-    0xae, 0x7a, 0xb9, 0x65, 0x20, 0xde, 0x3a, 0x18, 0xe5, 0xe1, 0x11, 0xb5, 0xea, 0xab, 0x09, 0x53,
-    0x12, 0xd7, 0xfe, 0x84,
-];
+const LIDO_STETH_ADDRESS: [u8; 20] =
+    alloy::primitives::hex!("ae7ab96520DE3A18E5e111B5EaAb095312D7fE84");
 
 /// Lido needs the approval on one leg only, so it cannot go in `PROTOCOLS_NEEDING_APPROVAL`.
 /// `getTransferData` sets `receiver` to the venue (`ProtocolWillDebit` into wstETH) for the wrap
