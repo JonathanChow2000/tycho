@@ -2,7 +2,7 @@ use substreams::hex;
 
 /// One component for the whole venue: stETH mints, and wstETH wraps, unwraps and mints through
 /// `receive()`. Keyed by stETH, the contract that holds the pool.
-pub const COMPONENT_ID: &str = "0xae7ab96520de3a18e5e111b5eaab095312d7fe84";
+pub const STETH_COMPONENT_ID: &str = "0xae7ab96520de3a18e5e111b5eaab095312d7fe84";
 
 pub const STETH_ADDRESS: [u8; 20] = hex!("ae7ab96520de3a18e5e111b5eaab095312d7fe84");
 pub const WSTETH_ADDRESS: [u8; 20] = hex!("7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0");
@@ -26,7 +26,7 @@ pub const CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_POSITION: [u8; 32] =
 pub const STAKING_STATE_POSITION: [u8; 32] =
     hex!("a3678de4a579be090bed1177e0a24f77cc29d181ac22fd7688aca344d8938015");
 /// `shares[wstETH]` in stETH's share mapping (mapping slot 0), i.e. `sharesOf(wstETH)`. The stETH
-/// locked in the wrapper is the wstETH component's tradable liquidity.
+/// locked in the wrapper is all that unwrapping can pay out, so it bounds that direction.
 pub const WSTETH_SHARES_POSITION: [u8; 32] =
     hex!("f37caed32e4e49c83636e0f1684f3f4a9a23c463a49eb17cd63abd50680b378b");
 
@@ -47,3 +47,44 @@ pub const BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY: &str =
     "buffered_ether_and_deposited_post_report";
 pub const CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY: &str =
     "cl_validators_balance_and_cl_pending_balance";
+
+/// A stETH storage slot this package tracks.
+pub struct TrackedSlot {
+    /// Raw storage position on the stETH contract.
+    pub position: [u8; 32],
+    /// Component attribute the raw slot value is reported as.
+    pub attribute: &'static str,
+    /// Store key, for the slots that feed `totalPooledEther`. `None` for the slots that are
+    /// reported as attributes but move no balance.
+    pub balance_key: Option<&'static str>,
+}
+
+/// Every tracked slot, and whether it feeds the component balance. Both call sites read this
+/// table, so a new slot is declared in one place instead of two parallel branch chains.
+pub const TRACKED_SLOTS: [TrackedSlot; 5] = [
+    TrackedSlot {
+        position: TOTAL_AND_EXTERNAL_SHARES_POSITION,
+        attribute: TOTAL_AND_EXTERNAL_SHARES_ATTR,
+        balance_key: Some(TOTAL_AND_EXTERNAL_SHARES_KEY),
+    },
+    TrackedSlot {
+        position: BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_POSITION,
+        attribute: BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR,
+        balance_key: Some(BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY),
+    },
+    TrackedSlot {
+        position: CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_POSITION,
+        attribute: CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR,
+        balance_key: Some(CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY),
+    },
+    TrackedSlot {
+        position: STAKING_STATE_POSITION,
+        attribute: STAKING_STATE_ATTR,
+        balance_key: None,
+    },
+    TrackedSlot {
+        position: WSTETH_SHARES_POSITION,
+        attribute: WSTETH_SHARES_ATTR,
+        balance_key: None,
+    },
+];

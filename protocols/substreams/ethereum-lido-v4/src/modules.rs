@@ -21,15 +21,9 @@ use tycho_substreams::{
 
 use crate::{
     constants::{
-        BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR,
-        BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY,
-        BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_POSITION,
-        CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR,
-        CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY,
-        CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_POSITION, COMPONENT_ID, ETH_ADDRESS,
-        STAKING_STATE_ATTR, STAKING_STATE_POSITION, STETH_ADDRESS, TOTAL_AND_EXTERNAL_SHARES_ATTR,
-        TOTAL_AND_EXTERNAL_SHARES_KEY, TOTAL_AND_EXTERNAL_SHARES_POSITION, WSTETH_ADDRESS,
-        WSTETH_SHARES_ATTR, WSTETH_SHARES_POSITION,
+        TrackedSlot, BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY,
+        CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY, ETH_ADDRESS, STETH_ADDRESS,
+        STETH_COMPONENT_ID, TOTAL_AND_EXTERNAL_SHARES_KEY, TRACKED_SLOTS, WSTETH_ADDRESS,
     },
     state::{BalanceState, InitialState},
     utils::{attribute_with_bytes, bytes_from_hex},
@@ -71,13 +65,13 @@ pub fn map_protocol_components(
 /// stETH <-> wstETH and ETH -> wstETH - all run off the same share rate, and keeping them
 /// together means ETH -> stETH is not also offered by a second component that cannot perform it.
 fn create_component() -> ProtocolComponent {
-    ProtocolComponent::new(COMPONENT_ID)
+    ProtocolComponent::new(STETH_COMPONENT_ID)
         .with_tokens(&[ETH_ADDRESS, STETH_ADDRESS, WSTETH_ADDRESS])
         .as_swap_type("lido_v4_pool", ImplementationType::Custom)
 }
 
-/// Carries the latest raw value of every slot that feeds a component balance, so a block that
-/// touches only one of them can still report both balances. Seeded from the manifest snapshot on
+/// Carries the latest raw value of every slot that feeds the component balance, so a block that
+/// touches only one of them can still report it. Seeded from the manifest snapshot on
 /// `start_block`.
 #[substreams::handlers::store]
 pub fn store_balance_slots(params: String, block: eth::v2::Block, store: StoreSetBigInt) {
@@ -112,7 +106,9 @@ pub fn store_balance_slots(params: String, block: eth::v2::Block, store: StoreSe
                 .iter()
                 .filter(|change| change.address == STETH_ADDRESS)
             {
-                if let Some(key) = balance_slot_key(&storage_change.key) {
+                if let Some(key) =
+                    tracked_slot(&storage_change.key).and_then(|slot| slot.balance_key)
+                {
                     store.set(
                         storage_change.ordinal,
                         key,
@@ -124,21 +120,14 @@ pub fn store_balance_slots(params: String, block: eth::v2::Block, store: StoreSe
     }
 }
 
-/// The subset of tracked slots that feed the component balances. The stake limit is reported as
-/// an attribute but moves no balance, so it maps to `None`.
-fn balance_slot_key(slot: &[u8]) -> Option<&'static str> {
-    if slot == TOTAL_AND_EXTERNAL_SHARES_POSITION {
-        Some(TOTAL_AND_EXTERNAL_SHARES_KEY)
-    } else if slot == BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_POSITION {
-        Some(BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY)
-    } else if slot == CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_POSITION {
-        Some(CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY)
-    } else {
-        None
-    }
+/// The tracked slot at `position`, or `None` for a slot this package ignores.
+fn tracked_slot(position: &[u8]) -> Option<&'static TrackedSlot> {
+    TRACKED_SLOTS
+        .iter()
+        .find(|slot| position == slot.position)
 }
 
-/// Emits the component creations on `start_block`, and attribute plus balance updates on every
+/// Emits the component creation on `start_block`, and attribute plus balance updates on every
 /// later block. The two paths are mutually exclusive.
 #[substreams::handlers::map]
 pub fn map_protocol_changes(
@@ -197,7 +186,7 @@ fn initialize_protocol_components(
     }
 
     builder.add_entity_change(&EntityChanges {
-        component_id: COMPONENT_ID.to_string(),
+        component_id: STETH_COMPONENT_ID.to_string(),
         attributes: initial_state.creation_attributes()?,
     });
 
@@ -213,7 +202,7 @@ fn handle_state_updates(
     balance_store: &StoreGetBigInt,
     transaction_changes: &mut HashMap<u64, TransactionChangesBuilder>,
 ) {
-    // Deferred: only four slots feed the balances and the consensus-layer one moves about once
+    // Deferred: only three slots feed the balances and the consensus-layer one moves about once
     // a day, so most blocks touch none of them and never read this.
     let mut balances = LazyCell::new(|| block_start_balance_state(balance_deltas, balance_store));
 
@@ -230,7 +219,7 @@ fn handle_state_updates(
                 .iter()
                 .filter(|change| change.address == STETH_ADDRESS)
             {
-                let Some(attr_name) = tracked_attribute(&storage_change.key) else {
+                let Some(tracked) = tracked_slot(&storage_change.key) else {
                     continue;
                 };
 
@@ -239,15 +228,15 @@ fn handle_state_updates(
                     .or_insert_with(|| TransactionChangesBuilder::new(&(tx.into())));
 
                 builder.add_entity_change(&EntityChanges {
-                    component_id: COMPONENT_ID.to_string(),
+                    component_id: STETH_COMPONENT_ID.to_string(),
                     attributes: vec![attribute_with_bytes(
-                        attr_name,
+                        tracked.attribute,
                         &storage_change.new_value,
                         ChangeType::Update,
                     )],
                 });
 
-                if let Some(key) = balance_slot_key(&storage_change.key) {
+                if let Some(key) = tracked.balance_key {
                     let value = BigInt::from_unsigned_bytes_be(&storage_change.new_value);
                     balances.apply(key, value);
                     balance_slot_touched = true;
@@ -276,7 +265,7 @@ fn add_balance_changes(builder: &mut TransactionChangesBuilder, balances: &Balan
         balance: balances
             .total_pooled_ether()
             .to_signed_bytes_be(),
-        component_id: COMPONENT_ID.as_bytes().to_vec(),
+        component_id: STETH_COMPONENT_ID.as_bytes().to_vec(),
     });
 }
 
@@ -325,19 +314,42 @@ fn decode_store_value(bytes: &[u8]) -> BigInt {
         .unwrap_or_else(BigInt::zero)
 }
 
-/// The attribute a tracked stETH slot maps to.
-fn tracked_attribute(slot: &[u8]) -> Option<&'static str> {
-    if slot == TOTAL_AND_EXTERNAL_SHARES_POSITION {
-        Some(TOTAL_AND_EXTERNAL_SHARES_ATTR)
-    } else if slot == BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_POSITION {
-        Some(BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR)
-    } else if slot == CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_POSITION {
-        Some(CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR)
-    } else if slot == STAKING_STATE_POSITION {
-        Some(STAKING_STATE_ATTR)
-    } else if slot == WSTETH_SHARES_POSITION {
-        Some(WSTETH_SHARES_ATTR)
-    } else {
-        None
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each row is reachable by its own position, so no two rows share one and no attribute is
+    /// paired with the wrong slot.
+    #[test]
+    fn every_tracked_slot_resolves_to_its_own_row() {
+        for slot in TRACKED_SLOTS.iter() {
+            let found = tracked_slot(&slot.position).expect("declared slot resolves");
+            assert_eq!(found.attribute, slot.attribute);
+            assert_eq!(found.balance_key, slot.balance_key);
+        }
+    }
+
+    #[test]
+    fn untracked_positions_resolve_to_none() {
+        assert!(tracked_slot(&[0u8; 32]).is_none());
+        assert!(tracked_slot(&[]).is_none());
+    }
+
+    /// The three inputs `BalanceState` reconstructs `totalPooledEther` from, and only those.
+    #[test]
+    fn only_the_pooled_ether_inputs_carry_a_store_key() {
+        let keys: Vec<_> = TRACKED_SLOTS
+            .iter()
+            .filter_map(|slot| slot.balance_key)
+            .collect();
+
+        assert_eq!(
+            keys,
+            [
+                TOTAL_AND_EXTERNAL_SHARES_KEY,
+                BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY,
+                CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY,
+            ]
+        );
     }
 }
