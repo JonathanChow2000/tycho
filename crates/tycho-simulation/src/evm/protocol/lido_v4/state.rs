@@ -14,11 +14,14 @@ use tycho_common::{
     Bytes,
 };
 
-use crate::evm::protocol::u256_num::{biguint_to_u256, u256_to_biguint, u256_to_f64};
+use crate::evm::protocol::{
+    safe_math::{safe_add_u256, safe_mul_u256},
+    u256_num::{biguint_to_u256, u256_to_biguint, u256_to_f64},
+};
 
 /// One component covers the whole venue: stETH mints, and wstETH wraps, unwraps and mints
 /// through `receive()`. Keyed by stETH, the contract that holds the pool.
-pub const COMPONENT_ID: &str = "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84";
+pub const STETH_COMPONENT_ID: &str = "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84";
 
 pub const STETH_ADDRESS: [u8; 20] = hex!("ae7ab96520de3a18e5e111b5eaab095312d7fe84");
 pub const WSTETH_ADDRESS: [u8; 20] = hex!("7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0");
@@ -141,7 +144,7 @@ impl LidoV4State {
         if denominator.is_zero() || numerator.is_zero() {
             return Err(SimulationError::FatalError("invalid Lido share rate state".to_string()));
         }
-        Ok((eth_amount * denominator) / numerator)
+        Ok(safe_mul_u256(eth_amount, denominator)? / numerator)
     }
 
     fn pooled_eth_by_shares(&self, shares_amount: U256) -> Result<U256, SimulationError> {
@@ -151,14 +154,7 @@ impl LidoV4State {
         if denominator.is_zero() || numerator.is_zero() {
             return Err(SimulationError::FatalError("invalid Lido share rate state".to_string()));
         }
-        Ok((shares_amount * numerator) / denominator)
-    }
-
-    fn decrease_staking_limit(&mut self, amount: U256) -> Result<(), SimulationError> {
-        let mut staking_state = self.staking_state;
-        staking_state.decrease(amount, self.block_number)?;
-        self.staking_state = staking_state;
-        Ok(())
+        Ok(safe_mul_u256(shares_amount, numerator)? / denominator)
     }
 
     fn amount_out_eth_to_steth(
@@ -167,9 +163,11 @@ impl LidoV4State {
     ) -> Result<GetAmountOutResult, SimulationError> {
         let shares_amount = self.shares_for_pooled_eth(amount_in)?;
         let mut new_state = self.clone();
-        new_state.decrease_staking_limit(amount_in)?;
-        new_state.total_shares += shares_amount;
-        new_state.buffered_ether += amount_in;
+        new_state
+            .staking_state
+            .decrease(amount_in, new_state.block_number)?;
+        new_state.total_shares = safe_add_u256(new_state.total_shares, shares_amount)?;
+        new_state.buffered_ether = safe_add_u256(new_state.buffered_ether, amount_in)?;
         let amount_out = new_state.pooled_eth_by_shares(shares_amount)?;
         Ok(GetAmountOutResult::new(
             u256_to_biguint(amount_out),
@@ -198,11 +196,13 @@ impl LidoV4State {
     ) -> Result<GetAmountOutResult, SimulationError> {
         let shares_amount = self.shares_for_pooled_eth(amount_in)?;
         let mut new_state = self.clone();
-        new_state.decrease_staking_limit(amount_in)?;
-        new_state.total_shares += shares_amount;
-        new_state.buffered_ether += amount_in;
+        new_state
+            .staking_state
+            .decrease(amount_in, new_state.block_number)?;
+        new_state.total_shares = safe_add_u256(new_state.total_shares, shares_amount)?;
+        new_state.buffered_ether = safe_add_u256(new_state.buffered_ether, amount_in)?;
         // The submitted stETH lands on the wrapper, so its share balance grows with the mint.
-        new_state.wsteth_shares += shares_amount;
+        new_state.wsteth_shares = safe_add_u256(new_state.wsteth_shares, shares_amount)?;
         Ok(GetAmountOutResult::new(
             u256_to_biguint(shares_amount),
             BigUint::from(SUBMIT_AND_WRAP_GAS),
@@ -598,7 +598,7 @@ mod tests {
             STAKING_STATE_ATTR.to_string(),
             Bytes::from(staking_state_raw(sample_staking_state()).to_be_bytes_vec()),
         );
-        let component_id = COMPONENT_ID.to_string();
+        let component_id = STETH_COMPONENT_ID.to_string();
 
         tycho_client::feed::synchronizer::ComponentWithState {
             state: ProtocolComponentState {
@@ -907,7 +907,7 @@ mod tests {
         state
             .delta_transition(
                 ProtocolStateDelta {
-                    component_id: COMPONENT_ID.to_string(),
+                    component_id: STETH_COMPONENT_ID.to_string(),
                     updated_attributes: HashMap::from([
                         ("block_number".to_string(), Bytes::from(88u64.to_be_bytes().to_vec())),
                         ("block_timestamp".to_string(), Bytes::from(99u64.to_be_bytes().to_vec())),

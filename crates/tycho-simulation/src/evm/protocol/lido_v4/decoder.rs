@@ -6,7 +6,7 @@ use tycho_common::{models::token::Token, Bytes};
 
 use super::state::{
     LidoV4State, StakingState, BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR,
-    CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR, COMPONENT_ID, STAKING_STATE_ATTR,
+    CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR, STAKING_STATE_ATTR, STETH_COMPONENT_ID,
     TOTAL_AND_EXTERNAL_SHARES_ATTR, WSTETH_SHARES_ATTR,
 };
 use crate::protocol::{
@@ -27,7 +27,7 @@ impl TryFromWithBlock<ComponentWithState, BlockHeader> for LidoV4State {
         if !snapshot
             .component
             .id
-            .eq_ignore_ascii_case(COMPONENT_ID)
+            .eq_ignore_ascii_case(STETH_COMPONENT_ID)
         {
             return Err(InvalidSnapshotError::ValueError(format!(
                 "unknown Lido V4 component id {}",
