@@ -12,10 +12,12 @@ set -euo pipefail
 
 BLOCK_NUMBER=${1:-25603297}
 
-if ! command -v cast >/dev/null 2>&1; then
-  echo "Error: 'cast' is required but was not found in PATH." >&2
-  exit 1
-fi
+for bin in cast jq; do
+  if ! command -v "$bin" >/dev/null 2>&1; then
+    echo "Error: '$bin' is required but was not found in PATH." >&2
+    exit 1
+  fi
+done
 
 STETH_PROXY="0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84"
 
@@ -67,13 +69,15 @@ staking_state=$(read_storage "$STETH_PROXY" "$STAKING_STATE_SLOT")
 wsteth_shares=$(read_storage "$STETH_PROXY" "$WSTETH_SHARES_SLOT")
 
 # The component has no creation event, so it is anchored to a transaction in the start block.
-# The first one that touches stETH is the meaningful anchor: at the v4 migration block that is
-# the DAO vote that ran finalizeUpgrade_v4.
+# The last one that touches stETH is the anchor: the storage above is read at the end of the
+# block, and map_protocol_changes takes either the creation branch or the update branch, never
+# both, so nothing replays intra-block writes. At the v4 migration block that transaction is the
+# DAO vote that ran finalizeUpgrade_v4.
 block_hex=$(printf '0x%x' "$BLOCK_NUMBER")
 creation_tx=$(
   cast rpc eth_getLogs \
     "{\"fromBlock\":\"$block_hex\",\"toBlock\":\"$block_hex\",\"address\":\"$STETH_PROXY\"}" \
-    --rpc-url "$RPC_URL" | sed -n 's/.*"transactionHash":"\(0x[0-9a-f]*\)".*/\1/p' | head -1
+    --rpc-url "$RPC_URL" | jq -r '.[-1].transactionHash // empty'
 )
 if [ -z "$creation_tx" ]; then
   echo "Error: block $BLOCK_NUMBER has no stETH logs to anchor the component to." >&2

@@ -7,7 +7,7 @@ Initial Lido integration, on the storage layout Lido core v4.0.0 introduced at b
 One component (`0xae7a...fE84`, the stETH contract) covers the whole venue and serves four
 directions:
 
-- `ETH -> stETH` — staking through `LiquidityPool.submit`.
+- `ETH -> stETH` — staking through `Lido.submit`.
 - `stETH <-> wstETH` — wrap and unwrap.
 - `ETH -> wstETH` — wstETH's `receive()` stakes and wraps in one call, which saves the hop
   through stETH.
