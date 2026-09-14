@@ -5,8 +5,8 @@ use tycho_client::feed::{synchronizer::ComponentWithState, BlockHeader};
 use tycho_common::{models::token::Token, Bytes};
 
 use super::state::{
-    LidoV3PoolKind, LidoV3State, StakingState, BUFFERED_ETHER_AND_DEPOSITED_VALIDATORS_ATTR,
-    CL_BALANCE_AND_CL_VALIDATORS_ATTR, STAKING_STATE_ATTR, STETH_COMPONENT_ID,
+    LidoV3PoolKind, LidoV3State, StakingState, BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR,
+    CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR, STAKING_STATE_ATTR, STETH_COMPONENT_ID,
     TOTAL_AND_EXTERNAL_SHARES_ATTR, WSTETH_COMPONENT_ID, WSTETH_SHARES_ATTR,
 };
 use crate::protocol::{
@@ -57,28 +57,28 @@ impl TryFromWithBlock<ComponentWithState, BlockHeader> for LidoV3State {
         let buffered_and_deposited = snapshot
             .state
             .attributes
-            .get(BUFFERED_ETHER_AND_DEPOSITED_VALIDATORS_ATTR)
+            .get(BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR)
             .ok_or_else(|| {
                 InvalidSnapshotError::MissingAttribute(
-                    BUFFERED_ETHER_AND_DEPOSITED_VALIDATORS_ATTR.to_string(),
+                    BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR.to_string(),
                 )
             })
             .map(|value| U256::from_be_slice(value))?;
-        let (buffered_ether, deposited_validators) =
+        let (buffered_ether, deposited_post_report) =
             LidoV3State::split_low_high_u128(buffered_and_deposited);
 
-        let cl_balance_and_validators = snapshot
+        let cl_balances = snapshot
             .state
             .attributes
-            .get(CL_BALANCE_AND_CL_VALIDATORS_ATTR)
+            .get(CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR)
             .ok_or_else(|| {
                 InvalidSnapshotError::MissingAttribute(
-                    CL_BALANCE_AND_CL_VALIDATORS_ATTR.to_string(),
+                    CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR.to_string(),
                 )
             })
             .map(|value| U256::from_be_slice(value))?;
-        let (cl_balance, cl_validators) =
-            LidoV3State::split_low_high_u128(cl_balance_and_validators);
+        let (cl_validators_balance, cl_pending_balance) =
+            LidoV3State::split_low_high_u128(cl_balances);
 
         let staking_state = match kind {
             LidoV3PoolKind::StEth => Some(StakingState::from_u256(U256::from_be_slice(
@@ -114,9 +114,9 @@ impl TryFromWithBlock<ComponentWithState, BlockHeader> for LidoV3State {
             total_shares,
             external_shares,
             buffered_ether,
-            deposited_validators,
-            cl_balance,
-            cl_validators,
+            deposited_post_report,
+            cl_validators_balance,
+            cl_pending_balance,
             staking_state,
             wsteth_shares,
         ))

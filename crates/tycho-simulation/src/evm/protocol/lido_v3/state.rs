@@ -24,13 +24,13 @@ pub const WSTETH_ADDRESS: [u8; 20] = hex!("7f39c581f595b53c5cb19bd0b3f8da6c935e2
 pub const ETH_ADDRESS: [u8; 20] = hex!("0000000000000000000000000000000000000000");
 
 pub const TOTAL_AND_EXTERNAL_SHARES_ATTR: &str = "total_and_external_shares";
-pub const BUFFERED_ETHER_AND_DEPOSITED_VALIDATORS_ATTR: &str =
-    "buffered_ether_and_deposited_validators";
-pub const CL_BALANCE_AND_CL_VALIDATORS_ATTR: &str = "cl_balance_and_cl_validators";
+pub const BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR: &str =
+    "buffered_ether_and_deposited_post_report";
+pub const CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR: &str =
+    "cl_validators_balance_and_cl_pending_balance";
 pub const STAKING_STATE_ATTR: &str = "staking_state";
 pub const WSTETH_SHARES_ATTR: &str = "wsteth_shares";
 
-const DEPOSIT_SIZE: u128 = 32_000_000_000_000_000_000;
 const UINT128_MAX_EXCLUSIVE: u128 = u128::MAX;
 
 const SUBMIT_GAS: u64 = 160_000;
@@ -51,9 +51,11 @@ pub struct LidoV3State {
     total_shares: U256,
     external_shares: U256,
     buffered_ether: U256,
-    deposited_validators: U256,
-    cl_balance: U256,
-    cl_validators: U256,
+    /// ETH sent to the deposit contract since the last oracle report; the next report moves it
+    /// into the consensus-layer balances below.
+    deposited_post_report: U256,
+    cl_validators_balance: U256,
+    cl_pending_balance: U256,
     staking_state: Option<StakingState>,
     /// `sharesOf(wstETH)`, i.e. the shares the wrapper holds. Only set for the wstETH component,
     /// where it bounds how much can be unwrapped.
@@ -77,9 +79,9 @@ impl LidoV3State {
         total_shares: U256,
         external_shares: U256,
         buffered_ether: U256,
-        deposited_validators: U256,
-        cl_balance: U256,
-        cl_validators: U256,
+        deposited_post_report: U256,
+        cl_validators_balance: U256,
+        cl_pending_balance: U256,
         staking_state: Option<StakingState>,
         wsteth_shares: Option<U256>,
     ) -> Self {
@@ -90,9 +92,9 @@ impl LidoV3State {
             total_shares,
             external_shares,
             buffered_ether,
-            deposited_validators,
-            cl_balance,
-            cl_validators,
+            deposited_post_report,
+            cl_validators_balance,
+            cl_pending_balance,
             staking_state,
             wsteth_shares,
         }
@@ -122,23 +124,20 @@ impl LidoV3State {
         Ok(self.total_shares - self.external_shares)
     }
 
-    fn transient_ether(&self) -> Result<U256, SimulationError> {
-        if self.cl_validators > self.deposited_validators {
-            return Err(SimulationError::FatalError(
-                "cl validators exceed deposited validators".to_string(),
-            ));
-        }
-        Ok((self.deposited_validators - self.cl_validators) * U256::from(DEPOSIT_SIZE))
-    }
-
-    fn internal_ether(&self) -> Result<U256, SimulationError> {
-        Ok(self.buffered_ether + self.cl_balance + self.transient_ether()?)
+    /// `Lido._getInternalEther()`: buffered ether plus every balance counted on the consensus
+    /// layer - active validators, deposits pending activation, and deposits made since the last
+    /// oracle report. Each term is a uint128 on chain, so the sum cannot overflow.
+    fn internal_ether(&self) -> U256 {
+        self.buffered_ether +
+            self.cl_validators_balance +
+            self.cl_pending_balance +
+            self.deposited_post_report
     }
 
     fn shares_for_pooled_eth(&self, eth_amount: U256) -> Result<U256, SimulationError> {
         Self::validate_u128_bound("eth amount", eth_amount)?;
         let denominator = self.internal_shares()?;
-        let numerator = self.internal_ether()?;
+        let numerator = self.internal_ether();
         if denominator.is_zero() || numerator.is_zero() {
             return Err(SimulationError::FatalError("invalid Lido share rate state".to_string()));
         }
@@ -147,7 +146,7 @@ impl LidoV3State {
 
     fn pooled_eth_by_shares(&self, shares_amount: U256) -> Result<U256, SimulationError> {
         Self::validate_u128_bound("shares amount", shares_amount)?;
-        let numerator = self.internal_ether()?;
+        let numerator = self.internal_ether();
         let denominator = self.internal_shares()?;
         if denominator.is_zero() || numerator.is_zero() {
             return Err(SimulationError::FatalError("invalid Lido share rate state".to_string()));
@@ -405,7 +404,7 @@ impl ProtocolSim for LidoV3State {
             {
                 // Wrapping mints against the caller's own stETH, so the protocol only bounds it
                 // by how much stETH exists.
-                let max_sell = self.internal_ether()?.min(max_input);
+                let max_sell = self.internal_ether().min(max_input);
                 Ok((
                     u256_to_biguint(max_sell),
                     u256_to_biguint(self.shares_for_pooled_eth(max_sell)?),
@@ -462,12 +461,12 @@ impl ProtocolSim for LidoV3State {
         }
         if let Some(buffered_and_deposited) = delta
             .updated_attributes
-            .get(BUFFERED_ETHER_AND_DEPOSITED_VALIDATORS_ATTR)
+            .get(BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR)
         {
-            let (buffered_ether, deposited_validators) =
+            let (buffered_ether, deposited_post_report) =
                 Self::split_low_high_u128(U256::from_be_slice(buffered_and_deposited));
             self.buffered_ether = buffered_ether;
-            self.deposited_validators = deposited_validators;
+            self.deposited_post_report = deposited_post_report;
         }
         if let Some(wsteth_shares) = delta
             .updated_attributes
@@ -475,14 +474,14 @@ impl ProtocolSim for LidoV3State {
         {
             self.wsteth_shares = Some(U256::from_be_slice(wsteth_shares));
         }
-        if let Some(cl_balance_and_validators) = delta
+        if let Some(cl_balances) = delta
             .updated_attributes
-            .get(CL_BALANCE_AND_CL_VALIDATORS_ATTR)
+            .get(CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR)
         {
-            let (cl_balance, cl_validators) =
-                Self::split_low_high_u128(U256::from_be_slice(cl_balance_and_validators));
-            self.cl_balance = cl_balance;
-            self.cl_validators = cl_validators;
+            let (cl_validators_balance, cl_pending_balance) =
+                Self::split_low_high_u128(U256::from_be_slice(cl_balances));
+            self.cl_validators_balance = cl_validators_balance;
+            self.cl_pending_balance = cl_pending_balance;
         }
         if let Some(staking_state) = delta
             .updated_attributes
@@ -567,9 +566,9 @@ mod tests {
             U256::from_str_radix("6696604823358181328750512", 10).unwrap(),
             U256::from_str_radix("80758346894447149184", 10).unwrap(),
             U256::from_str_radix("658338852056838456032283", 10).unwrap(),
-            U256::from(413_700u64),
+            U256::from(30_560u64) * U256::from(10).pow(U256::from(18)),
             U256::from_str_radix("21114116614166341429013364", 10).unwrap(),
-            U256::from(412_745u64),
+            U256::ZERO,
             Some(sample_staking_state()),
             None,
         )
@@ -605,15 +604,18 @@ mod tests {
                 ),
             ),
             (
-                BUFFERED_ETHER_AND_DEPOSITED_VALIDATORS_ATTR.to_string(),
+                BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR.to_string(),
                 Bytes::from(
-                    (state.buffered_ether | (state.deposited_validators << 128u32))
+                    (state.buffered_ether | (state.deposited_post_report << 128u32))
                         .to_be_bytes_vec(),
                 ),
             ),
             (
-                CL_BALANCE_AND_CL_VALIDATORS_ATTR.to_string(),
-                Bytes::from((state.cl_balance | (state.cl_validators << 128u32)).to_be_bytes_vec()),
+                CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR.to_string(),
+                Bytes::from(
+                    (state.cl_validators_balance | (state.cl_pending_balance << 128u32))
+                        .to_be_bytes_vec(),
+                ),
             ),
         ]);
         if kind == LidoV3PoolKind::WstEth {
@@ -834,7 +836,7 @@ mod tests {
             .unwrap();
 
         // No more stETH can be wrapped than exists.
-        let supply = state.internal_ether().unwrap();
+        let supply = state.internal_ether();
         assert_eq!(max_in, u256_to_biguint(supply));
         assert_eq!(
             max_out,
@@ -919,9 +921,9 @@ mod tests {
         let new_total = U256::from(999u64);
         let new_external = U256::from(111u64);
         let new_buffered = U256::from(222u64);
-        let new_deposited = U256::from(333u64);
-        let new_cl_balance = U256::from(444u64);
-        let new_cl_validators = U256::from(555u64);
+        let new_deposited_post_report = U256::from(333u64);
+        let new_cl_validators_balance = U256::from(444u64);
+        let new_cl_pending_balance = U256::from(555u64);
         let new_staking_state = StakingState {
             prev_stake_block_number: 77,
             prev_stake_limit: U256::from(888u64),
@@ -941,15 +943,17 @@ mod tests {
                             Bytes::from((new_total | (new_external << 128u32)).to_be_bytes_vec()),
                         ),
                         (
-                            BUFFERED_ETHER_AND_DEPOSITED_VALIDATORS_ATTR.to_string(),
+                            BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR.to_string(),
                             Bytes::from(
-                                (new_buffered | (new_deposited << 128u32)).to_be_bytes_vec(),
+                                (new_buffered | (new_deposited_post_report << 128u32))
+                                    .to_be_bytes_vec(),
                             ),
                         ),
                         (
-                            CL_BALANCE_AND_CL_VALIDATORS_ATTR.to_string(),
+                            CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR.to_string(),
                             Bytes::from(
-                                (new_cl_balance | (new_cl_validators << 128u32)).to_be_bytes_vec(),
+                                (new_cl_validators_balance | (new_cl_pending_balance << 128u32))
+                                    .to_be_bytes_vec(),
                             ),
                         ),
                         (
@@ -969,10 +973,36 @@ mod tests {
         assert_eq!(state.total_shares, new_total);
         assert_eq!(state.external_shares, new_external);
         assert_eq!(state.buffered_ether, new_buffered);
-        assert_eq!(state.deposited_validators, new_deposited);
-        assert_eq!(state.cl_balance, new_cl_balance);
-        assert_eq!(state.cl_validators, new_cl_validators);
+        assert_eq!(state.deposited_post_report, new_deposited_post_report);
+        assert_eq!(state.cl_validators_balance, new_cl_validators_balance);
+        assert_eq!(state.cl_pending_balance, new_cl_pending_balance);
         assert_eq!(state.staking_state, Some(new_staking_state));
+    }
+
+    /// State read from stETH storage at the Lido v4 migration block 25603297. Pricing
+    /// `sharesOf(wstETH)` at the share rate has to land on `stETH.balanceOf(wstETH)` from the
+    /// same block, which pins the v4 pooled-ether formula to the chain.
+    #[test]
+    fn share_rate_matches_chain_on_the_v4_storage_layout() {
+        let state = LidoV3State::new(
+            LidoV3PoolKind::WstEth,
+            25_603_297,
+            1_784_904_479,
+            U256::from_str_radix("7526667021904051320418763", 10).unwrap(),
+            U256::from_str_radix("3721126242498807385407", 10).unwrap(),
+            U256::from_str_radix("539569870340371095571", 10).unwrap(),
+            U256::from_str_radix("761440000000000000000000", 10).unwrap(),
+            U256::from_str_radix("8567227049119653000000000", 10).unwrap(),
+            U256::ZERO,
+            None,
+            Some(U256::from_str_radix("3628434125893615122886002", 10).unwrap()),
+        );
+
+        let wsteth_backing = state
+            .pooled_eth_by_shares(state.wsteth_shares().unwrap())
+            .unwrap();
+
+        assert_eq!(wsteth_backing, U256::from_str_radix("4499621841408863271318368", 10).unwrap());
     }
 
     #[test]

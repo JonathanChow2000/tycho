@@ -20,10 +20,13 @@ use tycho_substreams::{
 
 use crate::{
     constants::{
-        BUFFERED_ETHER_AND_DEPOSITED_VALIDATORS_ATTR, BUFFERED_ETHER_AND_DEPOSITED_VALIDATORS_KEY,
-        BUFFERED_ETHER_AND_DEPOSITED_VALIDATORS_POSITION, CL_BALANCE_AND_CL_VALIDATORS_ATTR,
-        CL_BALANCE_AND_CL_VALIDATORS_KEY, CL_BALANCE_AND_CL_VALIDATORS_POSITION, ETH_ADDRESS,
-        STAKING_STATE_ATTR, STAKING_STATE_POSITION, STETH_ADDRESS, STETH_COMPONENT_ID,
+        BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR,
+        BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY,
+        BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_POSITION,
+        CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR,
+        CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY,
+        CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_POSITION, ETH_ADDRESS, STAKING_STATE_ATTR,
+        STAKING_STATE_POSITION, STETH_ADDRESS, STETH_COMPONENT_ID,
         TOKEN_TO_TRACK_TOTAL_POOLED_ETH_ATTR, TOTAL_AND_EXTERNAL_SHARES_ATTR,
         TOTAL_AND_EXTERNAL_SHARES_KEY, TOTAL_AND_EXTERNAL_SHARES_POSITION, WSTETH_ADDRESS,
         WSTETH_COMPONENT_ID, WSTETH_SHARES_ATTR, WSTETH_SHARES_KEY, WSTETH_SHARES_POSITION,
@@ -85,10 +88,14 @@ pub fn store_balance_slots(params: String, block: eth::v2::Block, store: StoreSe
         store.set(0, TOTAL_AND_EXTERNAL_SHARES_KEY, &seed.total_and_external_shares);
         store.set(
             0,
-            BUFFERED_ETHER_AND_DEPOSITED_VALIDATORS_KEY,
-            &seed.buffered_ether_and_deposited_validators,
+            BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY,
+            &seed.buffered_ether_and_deposited_post_report,
         );
-        store.set(0, CL_BALANCE_AND_CL_VALIDATORS_KEY, &seed.cl_balance_and_cl_validators);
+        store.set(
+            0,
+            CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY,
+            &seed.cl_validators_balance_and_cl_pending_balance,
+        );
         store.set(0, WSTETH_SHARES_KEY, &seed.wsteth_shares);
         return;
     }
@@ -121,10 +128,10 @@ pub fn store_balance_slots(params: String, block: eth::v2::Block, store: StoreSe
 fn balance_slot_key(slot: &[u8]) -> Option<&'static str> {
     if slot == TOTAL_AND_EXTERNAL_SHARES_POSITION {
         Some(TOTAL_AND_EXTERNAL_SHARES_KEY)
-    } else if slot == BUFFERED_ETHER_AND_DEPOSITED_VALIDATORS_POSITION {
-        Some(BUFFERED_ETHER_AND_DEPOSITED_VALIDATORS_KEY)
-    } else if slot == CL_BALANCE_AND_CL_VALIDATORS_POSITION {
-        Some(CL_BALANCE_AND_CL_VALIDATORS_KEY)
+    } else if slot == BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_POSITION {
+        Some(BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY)
+    } else if slot == CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_POSITION {
+        Some(CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY)
     } else if slot == WSTETH_SHARES_POSITION {
         Some(WSTETH_SHARES_KEY)
     } else {
@@ -328,10 +335,12 @@ fn block_start_balance_state(
 
     BalanceState {
         total_and_external_shares: value_for(TOTAL_AND_EXTERNAL_SHARES_KEY),
-        buffered_ether_and_deposited_validators: value_for(
-            BUFFERED_ETHER_AND_DEPOSITED_VALIDATORS_KEY,
+        buffered_ether_and_deposited_post_report: value_for(
+            BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY,
         ),
-        cl_balance_and_cl_validators: value_for(CL_BALANCE_AND_CL_VALIDATORS_KEY),
+        cl_validators_balance_and_cl_pending_balance: value_for(
+            CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY,
+        ),
         wsteth_shares: value_for(WSTETH_SHARES_KEY),
     }
 }
@@ -361,10 +370,10 @@ enum AttributeTarget {
 fn tracked_attribute(slot: &[u8]) -> Option<(&'static str, AttributeTarget)> {
     if slot == TOTAL_AND_EXTERNAL_SHARES_POSITION {
         Some((TOTAL_AND_EXTERNAL_SHARES_ATTR, AttributeTarget::Both))
-    } else if slot == BUFFERED_ETHER_AND_DEPOSITED_VALIDATORS_POSITION {
-        Some((BUFFERED_ETHER_AND_DEPOSITED_VALIDATORS_ATTR, AttributeTarget::Both))
-    } else if slot == CL_BALANCE_AND_CL_VALIDATORS_POSITION {
-        Some((CL_BALANCE_AND_CL_VALIDATORS_ATTR, AttributeTarget::Both))
+    } else if slot == BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_POSITION {
+        Some((BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR, AttributeTarget::Both))
+    } else if slot == CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_POSITION {
+        Some((CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR, AttributeTarget::Both))
     } else if slot == STAKING_STATE_POSITION {
         Some((STAKING_STATE_ATTR, AttributeTarget::StEthOnly))
     } else if slot == WSTETH_SHARES_POSITION {

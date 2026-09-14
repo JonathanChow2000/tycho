@@ -22,12 +22,12 @@ params:
   #   RPC_URL=<your-archive-rpc> ./scripts/compute_initial_state.sh <block_number>
   store_balance_slots: &initial_state |
     {
-      "start_block": 24083113,
-      "total_and_external_shares": "0x00000000000000000000000000000000000000000005f18d02edc955cbcfc9b0",
-      "buffered_ether_and_deposited_validators": "0x00000000000000000000000000065004000000000000002303b296dd9f3631db",
-      "cl_balance_and_cl_validators": "0x00000000000000000000000000064d490000000000073f77f7680e9a096c4600",
-      "staking_state": "0x00001fc3842bd1f071c000000000190000001fc37ee5c9f3db1a0000016f7a9f",
-      "wsteth_shares": "0x00000000000000000000000000000000000000000002a0ab5c33b9a953fed49e"
+      "start_block": 25603297,
+      "total_and_external_shares": "0x00000000000000c9b9001a2e4d7ccd3f00000000000639d56fd47ec2536471cb",
+      "buffered_ether_and_deposited_post_report": "0x000000000000a13dbebf95fa7d800000000000000000001d4009424f9565a013",
+      "cl_validators_balance_and_cl_pending_balance": "0x00000000000000000000000000000000000000000007162e4f16cc0af69a3200",
+      "staking_state": "0x00001fc3842bd1f071c000000000190000001fc383c40d61b0f6f0000186acdf",
+      "wsteth_shares": "0x000000000000000000000000000000000000000000030059cedfb0543bebad72"
     }
   map_protocol_components: *initial_state
   map_protocol_changes: *initial_state
@@ -35,7 +35,7 @@ params:
 modules:
   - name: map_protocol_components
     kind: map
-    initialBlock: &start_block 24083113
+    initialBlock: &start_block 25603297
     inputs:
       - params: string
       - source: sf.ethereum.type.v2.Block

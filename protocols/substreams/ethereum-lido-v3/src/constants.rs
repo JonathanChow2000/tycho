@@ -7,12 +7,21 @@ pub const STETH_ADDRESS: [u8; 20] = hex!("ae7ab96520de3a18e5e111b5eaab095312d7fe
 pub const WSTETH_ADDRESS: [u8; 20] = hex!("7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0");
 pub const ETH_ADDRESS: [u8; 20] = hex!("0000000000000000000000000000000000000000");
 
+// stETH storage positions, each `keccak256` of the name Lido.sol v4.0.0 documents next to it.
+// Lido packs two 128-bit scalars per slot; the low half is listed first.
+
+/// `keccak256("lido.StETH.totalAndExternalShares")`: `totalShares` / `externalShares`.
 pub const TOTAL_AND_EXTERNAL_SHARES_POSITION: [u8; 32] =
     hex!("6038150aecaa250d524370a0fdcdec13f2690e0723eaf277f41d7cae26b359e6");
-pub const BUFFERED_ETHER_AND_DEPOSITED_VALIDATORS_POSITION: [u8; 32] =
-    hex!("a84c096ee27e195f25d7b6c7c2a03229e49f1a2a5087e57ce7d7127707942fe3");
-pub const CL_BALANCE_AND_CL_VALIDATORS_POSITION: [u8; 32] =
-    hex!("c36804a03ec742b57b141e4e5d8d3bd1ddb08451fd0f9983af8aaab357a78e2f");
+/// `keccak256("lido.Lido.bufferedEtherAndDepositedPostReport")`: `bufferedEther` /
+/// `depositedPostReport`, the ETH sent to the deposit contract since the last oracle report.
+pub const BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_POSITION: [u8; 32] =
+    hex!("81a11fa1111afa59b50051f60ccf604a39d96acb484dc467ad8eadb4a63f0a5f");
+/// `keccak256("lido.Lido.clValidatorsBalanceAndClPendingBalance")`: `clValidatorsBalance` /
+/// `clPendingBalance`, the consensus-layer balances as of the last oracle report.
+pub const CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_POSITION: [u8; 32] =
+    hex!("096e465397f38e659238ccd5d5a2c434ced54a63fd8d694045bfb058ab9d8112");
+/// `keccak256("lido.Lido.stakeLimit")`
 pub const STAKING_STATE_POSITION: [u8; 32] =
     hex!("a3678de4a579be090bed1177e0a24f77cc29d181ac22fd7688aca344d8938015");
 /// `shares[wstETH]` in stETH's share mapping (mapping slot 0), i.e. `sharesOf(wstETH)`. The stETH
@@ -21,23 +30,20 @@ pub const WSTETH_SHARES_POSITION: [u8; 32] =
     hex!("f37caed32e4e49c83636e0f1684f3f4a9a23c463a49eb17cd63abd50680b378b");
 
 pub const TOTAL_AND_EXTERNAL_SHARES_ATTR: &str = "total_and_external_shares";
-pub const BUFFERED_ETHER_AND_DEPOSITED_VALIDATORS_ATTR: &str =
-    "buffered_ether_and_deposited_validators";
-pub const CL_BALANCE_AND_CL_VALIDATORS_ATTR: &str = "cl_balance_and_cl_validators";
+pub const BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_ATTR: &str =
+    "buffered_ether_and_deposited_post_report";
+pub const CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_ATTR: &str =
+    "cl_validators_balance_and_cl_pending_balance";
 pub const STAKING_STATE_ATTR: &str = "staking_state";
 pub const WSTETH_SHARES_ATTR: &str = "wsteth_shares";
 pub const TOKEN_TO_TRACK_TOTAL_POOLED_ETH_ATTR: &str = "token_to_track_total_pooled_eth";
 
-/// Stake per beacon-chain validator. ETH sent to the deposit contract but not yet reflected in
-/// the consensus-layer balance is still pooled, so it is counted at this size.
-pub const DEPOSIT_SIZE_WEI: u128 = 32_000_000_000_000_000_000;
-
-/// Store keys holding the last seen raw value of each packed slot needed to compute
-/// `totalPooledEther`. Only two of the tracked slots feed the balance, and a block that touches
-/// one of them usually leaves the other untouched, so the latest value has to be carried across
-/// blocks.
-pub const BUFFERED_ETHER_AND_DEPOSITED_VALIDATORS_KEY: &str =
-    "buffered_ether_and_deposited_validators";
-pub const CL_BALANCE_AND_CL_VALIDATORS_KEY: &str = "cl_balance_and_cl_validators";
+/// Store keys holding the last seen raw value of each slot that feeds a component balance. A block
+/// that touches one of them usually leaves the others untouched, so the latest value of each has
+/// to be carried across blocks.
 pub const TOTAL_AND_EXTERNAL_SHARES_KEY: &str = "total_and_external_shares";
+pub const BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY: &str =
+    "buffered_ether_and_deposited_post_report";
+pub const CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY: &str =
+    "cl_validators_balance_and_cl_pending_balance";
 pub const WSTETH_SHARES_KEY: &str = "wsteth_shares";
