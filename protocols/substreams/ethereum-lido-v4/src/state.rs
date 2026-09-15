@@ -7,8 +7,10 @@ use substreams::scalar::BigInt;
 use crate::{
     constants::{
         TrackedSlot, BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY,
-        CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY, TOTAL_AND_EXTERNAL_SHARES_KEY,
-        TRACKED_SLOTS,
+        BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_SLOT,
+        CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY,
+        CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_SLOT, STAKING_STATE_SLOT,
+        TOTAL_AND_EXTERNAL_SHARES_KEY, TOTAL_AND_EXTERNAL_SHARES_SLOT, WSTETH_SHARES_SLOT,
     },
     utils::{attribute_with_bytes, bytes_from_hex},
 };
@@ -34,15 +36,21 @@ impl InitialState {
     /// component serves every direction, so it carries all of them.
     pub fn creation_attributes(&self) -> Result<Vec<Attribute>> {
         let words = [
-            &self.total_and_external_shares,
-            &self.buffered_ether_and_deposited_post_report,
-            &self.cl_validators_balance_and_cl_pending_balance,
-            &self.staking_state,
-            &self.wsteth_shares,
+            (&TOTAL_AND_EXTERNAL_SHARES_SLOT, &self.total_and_external_shares),
+            (
+                &BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_SLOT,
+                &self.buffered_ether_and_deposited_post_report,
+            ),
+            (
+                &CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_SLOT,
+                &self.cl_validators_balance_and_cl_pending_balance,
+            ),
+            (&STAKING_STATE_SLOT, &self.staking_state),
+            (&WSTETH_SHARES_SLOT, &self.wsteth_shares),
         ];
 
         let mut attributes = Vec::new();
-        for (slot, word) in TRACKED_SLOTS.iter().zip(words) {
+        for (slot, word) in words {
             attributes.extend(unpack_fields(slot, &bytes_from_hex(word)?, ChangeType::Creation));
         }
         Ok(attributes)
@@ -233,6 +241,28 @@ mod tests {
         assert_eq!(by_name["wsteth_shares"], big("3628434125893615122886002"));
         // getCurrentStakeLimit() is 150,000 ETH there, which is also the configured maximum.
         assert_eq!(by_name["max_stake_limit"], big("150000000000000000000000"));
+    }
+
+    /// The snapshot names a word for each slot, so a slot added to `TRACKED_SLOTS` without a
+    /// snapshot field is caught here rather than by a consumer missing an attribute.
+    #[test]
+    fn creation_attributes_cover_every_tracked_slot() {
+        let names: std::collections::HashSet<_> = snapshot()
+            .creation_attributes()
+            .expect("attributes")
+            .into_iter()
+            .map(|a| a.name)
+            .collect();
+
+        for slot in crate::constants::TRACKED_SLOTS.iter() {
+            for field in slot.fields {
+                assert!(
+                    names.contains(field.attribute),
+                    "{} is not in the snapshot",
+                    field.attribute
+                );
+            }
+        }
     }
 
     #[test]

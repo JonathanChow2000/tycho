@@ -72,47 +72,60 @@ pub struct TrackedSlot {
     pub balance_key: Option<&'static str>,
 }
 
-/// Every tracked slot, and whether it feeds the component balance. Both call sites read this
-/// table, so a slot is declared once.
+/// `totalShares` / `externalShares`.
+pub const TOTAL_AND_EXTERNAL_SHARES_SLOT: TrackedSlot = TrackedSlot {
+    position: TOTAL_AND_EXTERNAL_SHARES_POSITION,
+    fields: &[
+        PackedField { attribute: TOTAL_SHARES_ATTR, offset: 0, width: 128 },
+        PackedField { attribute: EXTERNAL_SHARES_ATTR, offset: 128, width: 128 },
+    ],
+    balance_key: Some(TOTAL_AND_EXTERNAL_SHARES_KEY),
+};
+
+/// `bufferedEther` / `depositedPostReport`.
+pub const BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_SLOT: TrackedSlot = TrackedSlot {
+    position: BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_POSITION,
+    fields: &[
+        PackedField { attribute: BUFFERED_ETHER_ATTR, offset: 0, width: 128 },
+        PackedField { attribute: DEPOSITED_POST_REPORT_ATTR, offset: 128, width: 128 },
+    ],
+    balance_key: Some(BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY),
+};
+
+/// `clValidatorsBalance` / `clPendingBalance`.
+pub const CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_SLOT: TrackedSlot = TrackedSlot {
+    position: CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_POSITION,
+    fields: &[
+        PackedField { attribute: CL_VALIDATORS_BALANCE_ATTR, offset: 0, width: 128 },
+        PackedField { attribute: CL_PENDING_BALANCE_ATTR, offset: 128, width: 128 },
+    ],
+    balance_key: Some(CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY),
+};
+
+/// `StakeLimitUtils` packs four fields of two different widths into this one.
+pub const STAKING_STATE_SLOT: TrackedSlot = TrackedSlot {
+    position: STAKING_STATE_POSITION,
+    fields: &[
+        PackedField { attribute: PREV_STAKE_BLOCK_NUMBER_ATTR, offset: 0, width: 32 },
+        PackedField { attribute: PREV_STAKE_LIMIT_ATTR, offset: 32, width: 96 },
+        PackedField { attribute: MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR, offset: 128, width: 32 },
+        PackedField { attribute: MAX_STAKE_LIMIT_ATTR, offset: 160, width: 96 },
+    ],
+    balance_key: None,
+};
+
+/// `sharesOf(wstETH)`, a whole word.
+pub const WSTETH_SHARES_SLOT: TrackedSlot = TrackedSlot {
+    position: WSTETH_SHARES_POSITION,
+    fields: &[PackedField { attribute: WSTETH_SHARES_ATTR, offset: 0, width: 256 }],
+    balance_key: None,
+};
+
+/// Every tracked slot, so a storage write can be matched to its row by position.
 pub const TRACKED_SLOTS: [TrackedSlot; 5] = [
-    TrackedSlot {
-        position: TOTAL_AND_EXTERNAL_SHARES_POSITION,
-        fields: &[
-            PackedField { attribute: TOTAL_SHARES_ATTR, offset: 0, width: 128 },
-            PackedField { attribute: EXTERNAL_SHARES_ATTR, offset: 128, width: 128 },
-        ],
-        balance_key: Some(TOTAL_AND_EXTERNAL_SHARES_KEY),
-    },
-    TrackedSlot {
-        position: BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_POSITION,
-        fields: &[
-            PackedField { attribute: BUFFERED_ETHER_ATTR, offset: 0, width: 128 },
-            PackedField { attribute: DEPOSITED_POST_REPORT_ATTR, offset: 128, width: 128 },
-        ],
-        balance_key: Some(BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY),
-    },
-    TrackedSlot {
-        position: CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_POSITION,
-        fields: &[
-            PackedField { attribute: CL_VALIDATORS_BALANCE_ATTR, offset: 0, width: 128 },
-            PackedField { attribute: CL_PENDING_BALANCE_ATTR, offset: 128, width: 128 },
-        ],
-        balance_key: Some(CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY),
-    },
-    // StakeLimitUtils packs four fields of two different widths into this one.
-    TrackedSlot {
-        position: STAKING_STATE_POSITION,
-        fields: &[
-            PackedField { attribute: PREV_STAKE_BLOCK_NUMBER_ATTR, offset: 0, width: 32 },
-            PackedField { attribute: PREV_STAKE_LIMIT_ATTR, offset: 32, width: 96 },
-            PackedField { attribute: MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR, offset: 128, width: 32 },
-            PackedField { attribute: MAX_STAKE_LIMIT_ATTR, offset: 160, width: 96 },
-        ],
-        balance_key: None,
-    },
-    TrackedSlot {
-        position: WSTETH_SHARES_POSITION,
-        fields: &[PackedField { attribute: WSTETH_SHARES_ATTR, offset: 0, width: 256 }],
-        balance_key: None,
-    },
+    TOTAL_AND_EXTERNAL_SHARES_SLOT,
+    BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_SLOT,
+    CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_SLOT,
+    STAKING_STATE_SLOT,
+    WSTETH_SHARES_SLOT,
 ];
