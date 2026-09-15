@@ -5,10 +5,11 @@ use tycho_client::feed::{synchronizer::ComponentWithState, BlockHeader};
 use tycho_common::{models::token::Token, Bytes};
 
 use super::state::{
-    LidoV4State, StakingState, BUFFERED_ETHER_ATTR, CL_PENDING_BALANCE_ATTR,
-    CL_VALIDATORS_BALANCE_ATTR, DEPOSITED_POST_REPORT_ATTR, EXTERNAL_SHARES_ATTR,
-    MAX_STAKE_LIMIT_ATTR, MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR, PREV_STAKE_BLOCK_NUMBER_ATTR,
-    PREV_STAKE_LIMIT_ATTR, STETH_COMPONENT_ID, TOTAL_SHARES_ATTR, WSTETH_SHARES_ATTR,
+    decode_attribute, decode_u32_attribute, LidoV4State, StakingState, BUFFERED_ETHER_ATTR,
+    CL_PENDING_BALANCE_ATTR, CL_VALIDATORS_BALANCE_ATTR, DEPOSITED_POST_REPORT_ATTR,
+    EXTERNAL_SHARES_ATTR, MAX_STAKE_LIMIT_ATTR, MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR,
+    PREV_STAKE_BLOCK_NUMBER_ATTR, PREV_STAKE_LIMIT_ATTR, STETH_COMPONENT_ID, TOTAL_SHARES_ATTR,
+    WSTETH_SHARES_ATTR,
 };
 use crate::protocol::{
     errors::InvalidSnapshotError,
@@ -36,19 +37,24 @@ impl TryFromWithBlock<ComponentWithState, BlockHeader> for LidoV4State {
             )));
         }
 
-        let value = |name: &str| -> Result<U256, InvalidSnapshotError> {
+        let raw = |name: &str| -> Result<&Bytes, InvalidSnapshotError> {
             snapshot
                 .state
                 .attributes
                 .get(name)
                 .ok_or_else(|| InvalidSnapshotError::MissingAttribute(name.to_string()))
-                .map(|value| U256::from_be_slice(value))
+        };
+        let value = |name: &str| -> Result<U256, InvalidSnapshotError> {
+            decode_attribute(name, raw(name)?).map_err(InvalidSnapshotError::ValueError)
+        };
+        let value_u32 = |name: &str| -> Result<u32, InvalidSnapshotError> {
+            decode_u32_attribute(name, raw(name)?).map_err(InvalidSnapshotError::ValueError)
         };
 
         let staking_state = StakingState::new(
-            value(PREV_STAKE_BLOCK_NUMBER_ATTR)?.to::<u32>(),
+            value_u32(PREV_STAKE_BLOCK_NUMBER_ATTR)?,
             value(PREV_STAKE_LIMIT_ATTR)?,
-            value(MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR)?.to::<u32>(),
+            value_u32(MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR)?,
             value(MAX_STAKE_LIMIT_ATTR)?,
         );
 

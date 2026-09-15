@@ -86,6 +86,43 @@ fn validate_u128_bound(name: &str, value: U256) -> Result<(), SimulationError> {
     Ok(())
 }
 
+/// Bytes an attribute occupies on the wire: the width of the stETH storage field the substreams
+/// package unpacks it from. The balances and share counts are `getLowAndHighUint128` halves, the
+/// stake limit fields are laid out by `StakeLimitUtils`, and `sharesOf(wstETH)` is a whole word.
+fn attribute_width(name: &str) -> Option<usize> {
+    match name {
+        TOTAL_SHARES_ATTR |
+        EXTERNAL_SHARES_ATTR |
+        BUFFERED_ETHER_ATTR |
+        DEPOSITED_POST_REPORT_ATTR |
+        CL_VALIDATORS_BALANCE_ATTR |
+        CL_PENDING_BALANCE_ATTR => Some(16),
+        PREV_STAKE_LIMIT_ATTR | MAX_STAKE_LIMIT_ATTR => Some(12),
+        PREV_STAKE_BLOCK_NUMBER_ATTR | MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR => Some(4),
+        WSTETH_SHARES_ATTR => Some(32),
+        _ => None,
+    }
+}
+
+/// Reads a big-endian attribute, refusing one wider than its storage field. The package emits
+/// minimal-length values, so a wider one is malformed; the `Err` names the attribute so the
+/// caller can report it instead of truncating it into a plausible number.
+pub(super) fn decode_attribute(name: &str, value: &[u8]) -> Result<U256, String> {
+    let Some(width) = attribute_width(name) else {
+        return Err(format!("{name} is not a Lido V4 attribute"));
+    };
+    if value.len() > width {
+        return Err(format!("{name} is {} bytes, wider than its {width}-byte field", value.len()));
+    }
+    Ok(U256::from_be_slice(value))
+}
+
+/// `decode_attribute` for the two 32-bit block counters in `StakeLimitUtils`.
+pub(super) fn decode_u32_attribute(name: &str, value: &[u8]) -> Result<u32, String> {
+    let value = decode_attribute(name, value)?;
+    u32::try_from(value).map_err(|_| format!("{name} does not fit in 32 bits"))
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StakingState {
     prev_stake_block_number: u32,
@@ -131,7 +168,9 @@ impl LidoV4State {
 
     /// `Lido._getInternalEther()`: buffered ether plus every balance counted on the consensus
     /// layer - active validators, deposits pending activation, and deposits made since the last
-    /// oracle report. Each term is a uint128 on chain, so the sum cannot overflow.
+    /// oracle report. Each term is one half of a word read through `getLowAndHighUint128`, which
+    /// masks it to 128 bits, and `decode_attribute` holds it to that width, so four of them sum
+    /// below 2^130.
     fn internal_ether(&self) -> U256 {
         self.buffered_ether +
             self.cl_validators_balance +
@@ -440,48 +479,61 @@ impl ProtocolSim for LidoV4State {
         _tokens: &HashMap<Bytes, Token>,
         _balances: &Balances,
     ) -> Result<(), TransitionError> {
-        let read = |name: &str| -> Option<U256> {
+        let read = |name: &str| -> Result<Option<U256>, TransitionError> {
             delta
                 .updated_attributes
                 .get(name)
-                .map(|value| U256::from_be_slice(value))
+                .map(|value| decode_attribute(name, value))
+                .transpose()
+                .map_err(TransitionError::DecodeError)
+        };
+        let read_u32 = |name: &str| -> Result<Option<u32>, TransitionError> {
+            delta
+                .updated_attributes
+                .get(name)
+                .map(|value| decode_u32_attribute(name, value))
+                .transpose()
+                .map_err(TransitionError::DecodeError)
         };
 
-        if let Some(value) = read(TOTAL_SHARES_ATTR) {
-            self.total_shares = value;
+        // Applied to a copy so a malformed attribute leaves `self` as it was.
+        let mut next = self.clone();
+        if let Some(value) = read(TOTAL_SHARES_ATTR)? {
+            next.total_shares = value;
         }
-        if let Some(value) = read(EXTERNAL_SHARES_ATTR) {
-            self.external_shares = value;
+        if let Some(value) = read(EXTERNAL_SHARES_ATTR)? {
+            next.external_shares = value;
         }
-        if let Some(value) = read(BUFFERED_ETHER_ATTR) {
-            self.buffered_ether = value;
+        if let Some(value) = read(BUFFERED_ETHER_ATTR)? {
+            next.buffered_ether = value;
         }
-        if let Some(value) = read(DEPOSITED_POST_REPORT_ATTR) {
-            self.deposited_post_report = value;
+        if let Some(value) = read(DEPOSITED_POST_REPORT_ATTR)? {
+            next.deposited_post_report = value;
         }
-        if let Some(value) = read(CL_VALIDATORS_BALANCE_ATTR) {
-            self.cl_validators_balance = value;
+        if let Some(value) = read(CL_VALIDATORS_BALANCE_ATTR)? {
+            next.cl_validators_balance = value;
         }
-        if let Some(value) = read(CL_PENDING_BALANCE_ATTR) {
-            self.cl_pending_balance = value;
+        if let Some(value) = read(CL_PENDING_BALANCE_ATTR)? {
+            next.cl_pending_balance = value;
         }
-        if let Some(value) = read(WSTETH_SHARES_ATTR) {
-            self.wsteth_shares = value;
+        if let Some(value) = read(WSTETH_SHARES_ATTR)? {
+            next.wsteth_shares = value;
         }
-        if let Some(value) = read(PREV_STAKE_BLOCK_NUMBER_ATTR) {
-            self.staking_state
-                .prev_stake_block_number = value.to::<u32>();
+        if let Some(value) = read_u32(PREV_STAKE_BLOCK_NUMBER_ATTR)? {
+            next.staking_state
+                .prev_stake_block_number = value;
         }
-        if let Some(value) = read(PREV_STAKE_LIMIT_ATTR) {
-            self.staking_state.prev_stake_limit = value;
+        if let Some(value) = read(PREV_STAKE_LIMIT_ATTR)? {
+            next.staking_state.prev_stake_limit = value;
         }
-        if let Some(value) = read(MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR) {
-            self.staking_state
-                .max_stake_limit_growth_blocks = value.to::<u32>();
+        if let Some(value) = read_u32(MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR)? {
+            next.staking_state
+                .max_stake_limit_growth_blocks = value;
         }
-        if let Some(value) = read(MAX_STAKE_LIMIT_ATTR) {
-            self.staking_state.max_stake_limit = value;
+        if let Some(value) = read(MAX_STAKE_LIMIT_ATTR)? {
+            next.staking_state.max_stake_limit = value;
         }
+        *self = next;
         Ok(())
     }
 
@@ -538,14 +590,14 @@ mod tests {
             protocol::{ProtocolComponent, ProtocolComponentState},
             Chain,
         },
-        simulation::errors::SimulationError,
+        simulation::errors::{SimulationError, TransitionError},
         Bytes,
     };
 
     use super::*;
     use crate::{
         evm::protocol::test_utils::try_decode_snapshot_with_defaults,
-        protocol::models::TryFromWithBlock,
+        protocol::{errors::InvalidSnapshotError, models::TryFromWithBlock},
     };
 
     fn eth_token() -> Token {
@@ -588,6 +640,17 @@ mod tests {
         U256::from_str_radix("2960000000000000000000000", 10).unwrap()
     }
 
+    /// Encodes an attribute the way the substreams package does: big-endian with no leading zero
+    /// bytes, and a single zero byte for zero.
+    fn attribute(value: U256) -> Bytes {
+        let bytes = value.to_be_bytes_vec();
+        let start = bytes
+            .iter()
+            .position(|byte| *byte != 0)
+            .unwrap_or(bytes.len() - 1);
+        Bytes::from(bytes[start..].to_vec())
+    }
+
     fn snapshot() -> tycho_client::feed::synchronizer::ComponentWithState {
         let state = sample_state();
         let staking = sample_staking_state();
@@ -605,7 +668,7 @@ mod tests {
             (MAX_STAKE_LIMIT_ATTR, staking.max_stake_limit),
         ]
         .into_iter()
-        .map(|(name, value)| (name.to_string(), Bytes::from(value.to_be_bytes_vec())))
+        .map(|(name, value)| (name.to_string(), attribute(value)))
         .collect();
         let component_id = STETH_COMPONENT_ID.to_string();
 
@@ -650,6 +713,30 @@ mod tests {
         assert_eq!(state.cl_pending_balance, expected.cl_pending_balance);
         assert_eq!(state.staking_state, expected.staking_state);
         assert_eq!(state.wsteth_shares, expected.wsteth_shares);
+    }
+
+    /// A whole word where the package emits a `getLowAndHighUint128` half cannot be a value the
+    /// package produced, so the decoder reports it by name.
+    #[tokio::test]
+    async fn decoder_rejects_an_attribute_wider_than_its_field() {
+        let mut snapshot = snapshot();
+        snapshot.state.attributes.insert(
+            TOTAL_SHARES_ATTR.to_string(),
+            Bytes::from(
+                sample_state()
+                    .total_shares
+                    .to_be_bytes_vec(),
+            ),
+        );
+
+        let err = try_decode_snapshot_with_defaults::<LidoV4State>(snapshot)
+            .await
+            .unwrap_err();
+
+        let InvalidSnapshotError::ValueError(message) = err else {
+            panic!("expected a value error, got {err:?}");
+        };
+        assert!(message.contains(TOTAL_SHARES_ATTR), "{message}");
     }
 
     #[tokio::test]
@@ -957,56 +1044,33 @@ mod tests {
                 ProtocolStateDelta {
                     component_id: STETH_COMPONENT_ID.to_string(),
                     updated_attributes: HashMap::from([
-                        (TOTAL_SHARES_ATTR.to_string(), Bytes::from(new_total.to_be_bytes_vec())),
-                        (
-                            EXTERNAL_SHARES_ATTR.to_string(),
-                            Bytes::from(new_external.to_be_bytes_vec()),
-                        ),
-                        (
-                            BUFFERED_ETHER_ATTR.to_string(),
-                            Bytes::from(new_buffered.to_be_bytes_vec()),
-                        ),
+                        (TOTAL_SHARES_ATTR.to_string(), attribute(new_total)),
+                        (EXTERNAL_SHARES_ATTR.to_string(), attribute(new_external)),
+                        (BUFFERED_ETHER_ATTR.to_string(), attribute(new_buffered)),
                         (
                             DEPOSITED_POST_REPORT_ATTR.to_string(),
-                            Bytes::from(new_deposited_post_report.to_be_bytes_vec()),
+                            attribute(new_deposited_post_report),
                         ),
                         (
                             CL_VALIDATORS_BALANCE_ATTR.to_string(),
-                            Bytes::from(new_cl_validators_balance.to_be_bytes_vec()),
+                            attribute(new_cl_validators_balance),
                         ),
-                        (
-                            CL_PENDING_BALANCE_ATTR.to_string(),
-                            Bytes::from(new_cl_pending_balance.to_be_bytes_vec()),
-                        ),
+                        (CL_PENDING_BALANCE_ATTR.to_string(), attribute(new_cl_pending_balance)),
                         (
                             PREV_STAKE_BLOCK_NUMBER_ATTR.to_string(),
-                            Bytes::from(
-                                U256::from(new_staking_state.prev_stake_block_number)
-                                    .to_be_bytes_vec(),
-                            ),
+                            attribute(U256::from(new_staking_state.prev_stake_block_number)),
                         ),
                         (
                             PREV_STAKE_LIMIT_ATTR.to_string(),
-                            Bytes::from(
-                                new_staking_state
-                                    .prev_stake_limit
-                                    .to_be_bytes_vec(),
-                            ),
+                            attribute(new_staking_state.prev_stake_limit),
                         ),
                         (
                             MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR.to_string(),
-                            Bytes::from(
-                                U256::from(new_staking_state.max_stake_limit_growth_blocks)
-                                    .to_be_bytes_vec(),
-                            ),
+                            attribute(U256::from(new_staking_state.max_stake_limit_growth_blocks)),
                         ),
                         (
                             MAX_STAKE_LIMIT_ATTR.to_string(),
-                            Bytes::from(
-                                new_staking_state
-                                    .max_stake_limit
-                                    .to_be_bytes_vec(),
-                            ),
+                            attribute(new_staking_state.max_stake_limit),
                         ),
                     ]),
                     deleted_attributes: Default::default(),
@@ -1023,6 +1087,38 @@ mod tests {
         assert_eq!(state.cl_validators_balance, new_cl_validators_balance);
         assert_eq!(state.cl_pending_balance, new_cl_pending_balance);
         assert_eq!(state.staking_state, new_staking_state);
+    }
+
+    /// `prev_stake_block_number` is a 32-bit field. A five-byte value cannot come from the
+    /// package, and narrowing it would wrap the block the stake limit accrues from.
+    #[test]
+    fn delta_transition_rejects_a_block_number_wider_than_its_field() {
+        let mut state = sample_state();
+        let before = state.clone();
+
+        let err = state
+            .delta_transition(
+                ProtocolStateDelta {
+                    component_id: STETH_COMPONENT_ID.to_string(),
+                    updated_attributes: HashMap::from([
+                        (TOTAL_SHARES_ATTR.to_string(), attribute(U256::from(1u64))),
+                        (
+                            PREV_STAKE_BLOCK_NUMBER_ATTR.to_string(),
+                            attribute(U256::from(1u64) << 32),
+                        ),
+                    ]),
+                    deleted_attributes: Default::default(),
+                },
+                &HashMap::new(),
+                &Balances::default(),
+            )
+            .unwrap_err();
+
+        let TransitionError::DecodeError(message) = err else {
+            panic!("expected a decode error, got {err:?}");
+        };
+        assert!(message.contains(PREV_STAKE_BLOCK_NUMBER_ATTR), "{message}");
+        assert_eq!(state, before, "a rejected delta must leave the state untouched");
     }
 
     #[test]
