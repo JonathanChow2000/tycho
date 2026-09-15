@@ -307,12 +307,12 @@ fn block_start_balance_state(
 
 /// `StoreSetBigInt` serialises values as decimal strings.
 ///
-/// A value that does not decode is a bug in the store module or the runtime, not a pool that
-/// holds nothing - and this package exists to keep a zero pooled ether from reaching consumers,
-/// where it is indistinguishable from a real one. So it fails loudly, naming the key.
+/// A value that does not decode means the store module or the runtime is broken, so this panics
+/// and names the key. The figure it returns becomes the component balance, where any stand-in
+/// for it reads as a genuine pooled ether.
 ///
-/// An empty value is not that: `StoreDeltas` carries an empty `old_value` for a key's first
-/// write, which is the seed on `start_block`.
+/// An empty value is the seed on `start_block`: `StoreDeltas` carries an empty `old_value` for a
+/// key's first write.
 fn decode_store_value(key: &str, bytes: &[u8]) -> BigInt {
     if bytes.is_empty() {
         return BigInt::zero();

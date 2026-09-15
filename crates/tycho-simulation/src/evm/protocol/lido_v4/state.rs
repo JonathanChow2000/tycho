@@ -32,8 +32,8 @@ const ETH: &[u8] = &ETH_ADDRESS;
 const STETH: &[u8] = &STETH_ADDRESS;
 const WSTETH: &[u8] = &WSTETH_ADDRESS;
 
-// The package reports one attribute per value Lido names, so nothing here needs to know how
-// those values are packed into storage words.
+// One attribute per value Lido names. The substreams package unpacks the storage words, so
+// each of these carries a single scalar.
 pub const TOTAL_SHARES_ATTR: &str = "total_shares";
 pub const EXTERNAL_SHARES_ATTR: &str = "external_shares";
 pub const BUFFERED_ETHER_ATTR: &str = "buffered_ether";
@@ -60,9 +60,9 @@ const UNWRAP_GAS: u64 = 66_000;
 pub struct LidoV4State {
     /// Height of the block a quote is expected to execute in, maintained by `apply_block`.
     ///
-    /// The stake limit accrues per block, so this has to follow the chain head rather than the
-    /// last block Lido itself was observed in - stETH storage moves on a minority of blocks, and
-    /// on the rest the limit would otherwise stop growing.
+    /// The stake limit accrues per block, so this tracks the chain head: `apply_block` advances
+    /// it on every message, including the blocks where stETH storage does not move, which are
+    /// most of them.
     execution_block_number: u64,
     total_shares: U256,
     external_shares: U256,

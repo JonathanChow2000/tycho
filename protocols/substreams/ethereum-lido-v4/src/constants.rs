@@ -30,9 +30,8 @@ pub const STAKING_STATE_POSITION: [u8; 32] =
 pub const WSTETH_SHARES_POSITION: [u8; 32] =
     hex!("f37caed32e4e49c83636e0f1684f3f4a9a23c463a49eb17cd63abd50680b378b");
 
-// One attribute per value the protocol names, not per storage word: a consumer reading
-// `total_shares` does not have to know how Lido packs its slots, and the names survive a
-// relocation like the v3 -> v4 move.
+// One attribute per value the protocol names. A consumer reads `total_shares`, and the name
+// holds across a slot relocation like the v3 -> v4 move.
 pub const TOTAL_SHARES_ATTR: &str = "total_shares";
 pub const EXTERNAL_SHARES_ATTR: &str = "external_shares";
 pub const BUFFERED_ETHER_ATTR: &str = "buffered_ether";
@@ -74,7 +73,7 @@ pub struct TrackedSlot {
 }
 
 /// Every tracked slot, and whether it feeds the component balance. Both call sites read this
-/// table, so a new slot is declared in one place instead of two parallel branch chains.
+/// table, so a slot is declared once.
 pub const TRACKED_SLOTS: [TrackedSlot; 5] = [
     TrackedSlot {
         position: TOTAL_AND_EXTERNAL_SHARES_POSITION,

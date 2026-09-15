@@ -65,8 +65,8 @@ impl InitialState {
 
 /// Reports each value packed into `word` as its own attribute.
 ///
-/// The packing rule lives here and nowhere else: consumers read `total_shares`, not a word they
-/// have to know how to split.
+/// The packing rule lives here and nowhere else: consumers read `total_shares` and the other
+/// names Lido gives these values.
 pub fn unpack_fields(slot: &TrackedSlot, word: &[u8], change: ChangeType) -> Vec<Attribute> {
     let word = BigInt::from_unsigned_bytes_be(word);
     slot.fields
