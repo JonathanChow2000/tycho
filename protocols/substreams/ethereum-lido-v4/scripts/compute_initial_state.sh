@@ -6,11 +6,17 @@
 # Usage:
 #   RPC_URL=<archive-rpc> ./scripts/compute_initial_state.sh [block_number]
 #
-# Falls back to ETH_RPC_URL, then to a public endpoint, when RPC_URL is unset.
+# RPC_URL must be an archive node: the script reads storage at a past block, which a public
+# endpoint will refuse.
 
 set -euo pipefail
 
 BLOCK_NUMBER=${1:-25603297}
+
+if [ -z "${RPC_URL:-}" ]; then
+  echo "Error: RPC_URL must be set to an archive Ethereum RPC." >&2
+  exit 1
+fi
 
 for bin in cast jq; do
   if ! command -v "$bin" >/dev/null 2>&1; then
@@ -29,36 +35,11 @@ STAKING_STATE_SLOT="0xa3678de4a579be090bed1177e0a24f77cc29d181ac22fd7688aca344d8
 # shares[wstETH] in stETH's share mapping (mapping slot 0): cast index address <wstETH> 0
 WSTETH_SHARES_SLOT="0xf37caed32e4e49c83636e0f1684f3f4a9a23c463a49eb17cd63abd50680b378b"
 
-resolve_rpc_url() {
-  local candidates=()
-
-  if [ -n "${RPC_URL:-}" ]; then
-    candidates+=("$RPC_URL")
-  fi
-  if [ -n "${ETH_RPC_URL:-}" ]; then
-    candidates+=("$ETH_RPC_URL")
-  fi
-  candidates+=("https://ethereum-rpc.publicnode.com")
-
-  local candidate
-  for candidate in "${candidates[@]}"; do
-    if cast block "$BLOCK_NUMBER" --rpc-url "$candidate" >/dev/null 2>&1; then
-      echo "$candidate"
-      return 0
-    fi
-  done
-
-  echo "Error: no working Ethereum RPC endpoint (tried RPC_URL, ETH_RPC_URL, public fallback)." >&2
-  exit 1
-}
-
 read_storage() {
   local contract=$1
   local slot=$2
   cast storage "$contract" "$slot" --block "$BLOCK_NUMBER" --rpc-url "$RPC_URL"
 }
-
-RPC_URL=$(resolve_rpc_url)
 
 echo "Reading stETH raw storage at block $BLOCK_NUMBER from $RPC_URL..." >&2
 

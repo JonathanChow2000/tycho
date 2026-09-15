@@ -19,6 +19,8 @@ import {PropAMMExecutor} from "../src/executors/PropAMMExecutor.sol";
 import {
     PropAMMFallbackExecutor
 } from "../src/executors/PropAMMFallbackExecutor.sol";
+import {FallbackExecutor} from "../src/executors/FallbackExecutor.sol";
+import {TychoFallbackRouter} from "../src/fallback/TychoFallbackRouter.sol";
 import {UniswapV2Executor} from "../src/executors/UniswapV2Executor.sol";
 import {
     UniswapV3Executor,
@@ -141,6 +143,8 @@ contract TychoRouterTestSetup is
     PropAMMExecutor public propAMMExecutor;
     PropAMMFallbackExecutor public propAMMFallbackExecutor;
     SkyExecutor public skyExecutor;
+    TychoFallbackRouter public fallbackRouter;
+    FallbackExecutor public fallbackExecutor;
 
     FeeCalculator feeCalculator;
     address routerFeeReceiver;
@@ -265,6 +269,10 @@ contract TychoRouterTestSetup is
             new RingSwapV2Executor(RING_FEW_FACTORY, RING_SWAP_FACTORY);
         propAMMExecutor = new PropAMMExecutor();
         propAMMFallbackExecutor = new PropAMMFallbackExecutor();
+        // Every executor's address here is deterministic from its deploy order, and the
+        // Rust-generated calldata.txt hardcodes those addresses, so inserting a deployment
+        // invalidates every entry after it. Add new deployments at the end of this block.
+        //
         // The Sky venues exist only on mainnet, and the executor's constructor
         // reads their token wiring, so it cannot deploy on forks where the
         // venues have no code. It is deployed after the fixed executor set, so
@@ -288,13 +296,14 @@ contract TychoRouterTestSetup is
             nativeExecutor = new NativeExecutor(nativeRouterV6);
         }
 
-        // Deployed after the conditional executors so that adding it does not
-        // shift their deterministic addresses. Lido V4 is only configured on
-        // mainnet, where both Sky and Native always deploy.
+        fallbackRouter = new TychoFallbackRouter(poolManager, FLUIDV1_LIQUIDITY);
+        fallbackExecutor = new FallbackExecutor(address(fallbackRouter));
+        // Last, per the note above: Lido V4 is only configured on mainnet, where both Sky and
+        // Native always deploy, so appending it shifts no address before it.
         lidoV4Executor = new LidoV4Executor(STETH_ADDR, WSTETH_ADDR);
 
         address[] memory executors = new address[](
-            28 + (skyDeployable ? 1 : 0) + (supportsNative ? 1 : 0)
+            29 + (skyDeployable ? 1 : 0) + (supportsNative ? 1 : 0)
         );
         executors[0] = address(usv2Executor);
         executors[1] = address(usv3Executor);
@@ -323,8 +332,9 @@ contract TychoRouterTestSetup is
         executors[24] = address(ringSwapV2Executor);
         executors[25] = address(propAMMExecutor);
         executors[26] = address(propAMMFallbackExecutor);
-        executors[27] = address(lidoV4Executor);
-        uint256 nextExecutorIndex = 28;
+        executors[27] = address(fallbackExecutor);
+        executors[28] = address(lidoV4Executor);
+        uint256 nextExecutorIndex = 29;
         if (skyDeployable) {
             executors[nextExecutorIndex] = address(skyExecutor);
             nextExecutorIndex++;
@@ -349,7 +359,13 @@ contract TychoRouterTestSetup is
         routerFeeReceiver = makeAddr("routerFeeReceiver");
         // clientFeeReceiver is the address corresponding to CLIENT_FEE_RECEIVER_PK
         clientFeeReceiver = vm.addr(CLIENT_FEE_RECEIVER_PK);
-        feeCalculator = new FeeCalculator(FEE_SETTER);
+        feeCalculator = new FeeCalculator(FEE_SETTER, routerFeeReceiver);
+        // The calculator enables positive slippage capture in its constructor.
+        // The swap tests quote a round `expectedAmountOut` below the real pool
+        // output and assert the receiver gets that whole output, so capture is
+        // switched off here and exercised by the tests that opt back in.
+        vm.prank(FEE_SETTER);
+        feeCalculator.setPositiveSlippageEnabled(false);
     }
 
     function pleEncode(bytes[] memory data)
