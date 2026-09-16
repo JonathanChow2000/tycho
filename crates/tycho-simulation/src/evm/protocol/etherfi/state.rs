@@ -195,36 +195,6 @@ fn redemption_units(amount: U256) -> Result<u64, SimulationError> {
     Ok(amount.div_ceil(scale).to::<u64>())
 }
 
-/// The attributes the pool component carries, in the order the decoder reads them.
-pub(super) const POOL_ATTRS: [&str; 18] = [
-    TOTAL_VALUE_OUT_OF_LP_ATTR,
-    TOTAL_VALUE_IN_LP_ATTR,
-    TOTAL_SHARES_ATTR,
-    REDEMPTION_BUCKET.capacity,
-    REDEMPTION_BUCKET.remaining,
-    REDEMPTION_BUCKET.last_refill,
-    REDEMPTION_BUCKET.refill_rate,
-    EXIT_FEE_SPLIT_TO_TREASURY_BPS_ATTR,
-    EXIT_FEE_BPS_ATTR,
-    LOW_WATERMARK_BPS_ATTR,
-    MINT_BUCKET.capacity,
-    MINT_BUCKET.remaining,
-    MINT_BUCKET.last_refill,
-    MINT_BUCKET.refill_rate,
-    BURN_BUCKET.capacity,
-    BURN_BUCKET.remaining,
-    BURN_BUCKET.last_refill,
-    BURN_BUCKET.refill_rate,
-];
-
-/// The attributes the wrapper component carries.
-pub(super) const WRAPPER_ATTRS: [&str; 4] =
-    [TOTAL_VALUE_OUT_OF_LP_ATTR, TOTAL_VALUE_IN_LP_ATTR, TOTAL_SHARES_ATTR, WEETH_SHARES_ATTR];
-
-/// Names the stream decoder puts in every delta so a state can key off the chain head. They are
-/// not EtherFi attributes and carry no protocol state.
-const INJECTED_ATTRS: [&str; 2] = ["block_number", "block_timestamp"];
-
 /// Bytes an attribute occupies on the wire: the width of the storage field the substreams
 /// package unpacks it from. The balances are `uint128` halves, the share counts whole words, the
 /// bucket fields `uint64` and the basis-point fields `uint16`.
@@ -492,14 +462,6 @@ impl EtherfiState {
         ))
     }
 
-    /// The names this component's deltas may carry.
-    fn attribute_names(&self) -> &'static [&'static str] {
-        match &self.venue {
-            Venue::Pool(_) => &POOL_ATTRS,
-            Venue::Wrapper(_) => &WRAPPER_ATTRS,
-        }
-    }
-
     /// What each bucket can pay at `now`; `None` for the wrapper, which has no bucket.
     fn consumable_units(&self, now: u64) -> Option<[u64; 3]> {
         match &self.venue {
@@ -511,6 +473,21 @@ impl EtherfiState {
             Venue::Wrapper(_) => None,
         }
     }
+}
+
+/// The values one delta carries for a component, decoded but not yet applied.
+enum VenueFields {
+    Pool {
+        redemption_bucket: [Option<u64>; 4],
+        mint_bucket: [Option<u64>; 4],
+        burn_bucket: [Option<u64>; 4],
+        exit_fee_split_to_treasury_bps: Option<u16>,
+        exit_fee_bps: Option<u16>,
+        low_watermark_bps: Option<u16>,
+    },
+    Wrapper {
+        weeth_shares: Option<U256>,
+    },
 }
 
 #[typetag::serde]
@@ -669,71 +646,96 @@ impl ProtocolSim for EtherfiState {
                 .transpose()
                 .map_err(TransitionError::DecodeError)
         };
-        let update_bucket =
-            |bucket: &mut BucketLimit, names: &BucketAttributes| -> Result<(), TransitionError> {
-                if let Some(value) = read_u64(names.capacity)? {
-                    bucket.capacity = value;
-                }
-                if let Some(value) = read_u64(names.remaining)? {
-                    bucket.remaining = value;
-                }
-                if let Some(value) = read_u64(names.last_refill)? {
-                    bucket.last_refill = value;
-                }
-                if let Some(value) = read_u64(names.refill_rate)? {
-                    bucket.refill_rate = value;
-                }
-                Ok(())
-            };
+        let read_bucket = |names: &BucketAttributes| -> Result<[Option<u64>; 4], TransitionError> {
+            Ok([
+                read_u64(names.capacity)?,
+                read_u64(names.remaining)?,
+                read_u64(names.last_refill)?,
+                read_u64(names.refill_rate)?,
+            ])
+        };
+        fn apply_bucket(bucket: &mut BucketLimit, fields: [Option<u64>; 4]) {
+            let [capacity, remaining, last_refill, refill_rate] = fields;
+            if let Some(value) = capacity {
+                bucket.capacity = value;
+            }
+            if let Some(value) = remaining {
+                bucket.remaining = value;
+            }
+            if let Some(value) = last_refill {
+                bucket.last_refill = value;
+            }
+            if let Some(value) = refill_rate {
+                bucket.refill_rate = value;
+            }
+        }
 
-        // Applied to a copy so a malformed attribute leaves `self` as it was.
-        let mut next = self.clone();
-        if let Some(value) = read(TOTAL_VALUE_OUT_OF_LP_ATTR)? {
-            next.total_value_out_of_lp = value;
+        // Every attribute is decoded before the first assignment, so a width error leaves the
+        // state as it was. The pending-block path applies a delta, logs whatever it returns and
+        // quotes from the result either way (`TychoStreamDecoder::decode_pending`), so a state
+        // half way through these values would be quoted from.
+        //
+        // Each component decodes only the names it carries, so the other one's names are
+        // ignored the way any unknown name is.
+        let total_value_out_of_lp = read(TOTAL_VALUE_OUT_OF_LP_ATTR)?;
+        let total_value_in_lp = read(TOTAL_VALUE_IN_LP_ATTR)?;
+        let total_shares = read(TOTAL_SHARES_ATTR)?;
+        let venue_fields = match &self.venue {
+            Venue::Pool(_) => VenueFields::Pool {
+                redemption_bucket: read_bucket(&REDEMPTION_BUCKET)?,
+                mint_bucket: read_bucket(&MINT_BUCKET)?,
+                burn_bucket: read_bucket(&BURN_BUCKET)?,
+                exit_fee_split_to_treasury_bps: read_u16(EXIT_FEE_SPLIT_TO_TREASURY_BPS_ATTR)?,
+                exit_fee_bps: read_u16(EXIT_FEE_BPS_ATTR)?,
+                low_watermark_bps: read_u16(LOW_WATERMARK_BPS_ATTR)?,
+            },
+            Venue::Wrapper(_) => VenueFields::Wrapper { weeth_shares: read(WEETH_SHARES_ATTR)? },
+        };
+
+        if let Some(value) = total_value_out_of_lp {
+            self.total_value_out_of_lp = value;
         }
-        if let Some(value) = read(TOTAL_VALUE_IN_LP_ATTR)? {
-            next.total_value_in_lp = value;
+        if let Some(value) = total_value_in_lp {
+            self.total_value_in_lp = value;
         }
-        if let Some(value) = read(TOTAL_SHARES_ATTR)? {
-            next.total_shares = value;
+        if let Some(value) = total_shares {
+            self.total_shares = value;
         }
-        match &mut next.venue {
-            Venue::Pool(pool) => {
-                update_bucket(&mut pool.redemption.limit, &REDEMPTION_BUCKET)?;
-                update_bucket(&mut pool.mint_limit, &MINT_BUCKET)?;
-                update_bucket(&mut pool.burn_limit, &BURN_BUCKET)?;
-                if let Some(value) = read_u16(EXIT_FEE_SPLIT_TO_TREASURY_BPS_ATTR)? {
+        match (&mut self.venue, venue_fields) {
+            (
+                Venue::Pool(pool),
+                VenueFields::Pool {
+                    redemption_bucket,
+                    mint_bucket,
+                    burn_bucket,
+                    exit_fee_split_to_treasury_bps,
+                    exit_fee_bps,
+                    low_watermark_bps,
+                },
+            ) => {
+                apply_bucket(&mut pool.redemption.limit, redemption_bucket);
+                apply_bucket(&mut pool.mint_limit, mint_bucket);
+                apply_bucket(&mut pool.burn_limit, burn_bucket);
+                if let Some(value) = exit_fee_split_to_treasury_bps {
                     pool.redemption
                         .exit_fee_split_to_treasury_bps = value;
                 }
-                if let Some(value) = read_u16(EXIT_FEE_BPS_ATTR)? {
+                if let Some(value) = exit_fee_bps {
                     pool.redemption.exit_fee_bps = value;
                 }
-                if let Some(value) = read_u16(LOW_WATERMARK_BPS_ATTR)? {
+                if let Some(value) = low_watermark_bps {
                     pool.redemption.low_watermark_bps = value;
                 }
             }
-            Venue::Wrapper(wrapper) => {
-                if let Some(value) = read(WEETH_SHARES_ATTR)? {
+            (Venue::Wrapper(wrapper), VenueFields::Wrapper { weeth_shares }) => {
+                if let Some(value) = weeth_shares {
                     wrapper.weeth_shares = value;
                 }
             }
+            // `venue_fields` is built from `self.venue`, which nothing above changes.
+            (Venue::Pool(_), VenueFields::Wrapper { .. }) |
+            (Venue::Wrapper(_), VenueFields::Pool { .. }) => unreachable!(),
         }
-        // A name this component does not carry is a package the simulation has drifted from:
-        // a rename, a typo, or an attribute meant for the other component. Applying the rest
-        // would leave the value it carries frozen at whatever the snapshot held.
-        if let Some(name) = attributes.keys().find(|name| {
-            !INJECTED_ATTRS.contains(&name.as_str()) &&
-                !next
-                    .attribute_names()
-                    .contains(&name.as_str())
-        }) {
-            return Err(TransitionError::DecodeError(format!(
-                "{name} is not an attribute of this EtherFi component"
-            )));
-        }
-
-        *self = next;
         Ok(())
     }
 
@@ -778,6 +780,31 @@ impl ProtocolSim for EtherfiState {
 
 #[cfg(test)]
 mod tests {
+    /// The attributes the pool component carries, in the order the decoder reads them.
+    pub(super) const POOL_ATTRS: [&str; 18] = [
+        TOTAL_VALUE_OUT_OF_LP_ATTR,
+        TOTAL_VALUE_IN_LP_ATTR,
+        TOTAL_SHARES_ATTR,
+        REDEMPTION_BUCKET.capacity,
+        REDEMPTION_BUCKET.remaining,
+        REDEMPTION_BUCKET.last_refill,
+        REDEMPTION_BUCKET.refill_rate,
+        EXIT_FEE_SPLIT_TO_TREASURY_BPS_ATTR,
+        EXIT_FEE_BPS_ATTR,
+        LOW_WATERMARK_BPS_ATTR,
+        MINT_BUCKET.capacity,
+        MINT_BUCKET.remaining,
+        MINT_BUCKET.last_refill,
+        MINT_BUCKET.refill_rate,
+        BURN_BUCKET.capacity,
+        BURN_BUCKET.remaining,
+        BURN_BUCKET.last_refill,
+        BURN_BUCKET.refill_rate,
+    ];
+
+    /// The attributes the wrapper component carries.
+    pub(super) const WRAPPER_ATTRS: [&str; 4] =
+        [TOTAL_VALUE_OUT_OF_LP_ATTR, TOTAL_VALUE_IN_LP_ATTR, TOTAL_SHARES_ATTR, WEETH_SHARES_ATTR];
     use std::collections::HashMap;
 
     use tycho_client::feed::BlockHeader;
@@ -886,6 +913,14 @@ mod tests {
             u256_dec("2001243491556134113932753"),
             Venue::Wrapper(WrapperState { weeth_shares: u256_dec("1934528716353929340955601") }),
         )
+    }
+
+    /// The names the component carries.
+    fn attribute_names(state: &EtherfiState) -> &'static [&'static str] {
+        match &state.venue {
+            Venue::Pool(_) => &POOL_ATTRS,
+            Venue::Wrapper(_) => &WRAPPER_ATTRS,
+        }
     }
 
     fn pool_of(state: &EtherfiState) -> PoolState {
@@ -1605,37 +1640,6 @@ mod tests {
     }
 
     #[test]
-    fn delta_transition_rejects_an_attribute_of_the_other_component() {
-        let mut wrapper = wrapper_state();
-        let err = wrapper
-            .delta_transition(
-                delta(
-                    WRAPPER_COMPONENT_ID,
-                    vec![(EXIT_FEE_BPS_ATTR.to_string(), attribute(U256::from(1u64)))],
-                ),
-                &HashMap::new(),
-                &Balances::default(),
-            )
-            .unwrap_err();
-        let TransitionError::DecodeError(message) = err else {
-            panic!("expected a decode error, got {err:?}");
-        };
-        assert!(message.contains(EXIT_FEE_BPS_ATTR), "{message}");
-
-        let mut pool = pool_state();
-        assert!(pool
-            .delta_transition(
-                delta(
-                    POOL_COMPONENT_ID,
-                    vec![(WEETH_SHARES_ATTR.to_string(), attribute(U256::from(1u64)))],
-                ),
-                &HashMap::new(),
-                &Balances::default(),
-            )
-            .is_err());
-    }
-
-    #[test]
     fn bucket_refill_caps_at_capacity() {
         let limit = BucketLimit { capacity: 10, remaining: 1, last_refill: 100, refill_rate: 5 };
         let refilled = limit.refilled(103);
@@ -1827,7 +1831,7 @@ mod tests {
                 Venue::Pool(_) => POOL_COMPONENT_ID,
                 Venue::Wrapper(_) => WRAPPER_COMPONENT_ID,
             };
-            for name in base.attribute_names() {
+            for name in attribute_names(&base) {
                 let mut state = base.clone();
                 // 7 fits every field and differs from every value in the fixtures.
                 state
@@ -1842,8 +1846,41 @@ mod tests {
         }
     }
 
+    /// A name the other component carries is ignored, malformed or not. Each component decodes
+    /// only its own names, so a package that starts emitting an attribute for one of them does
+    /// not stop deltas reaching the other.
+    #[test]
+    fn delta_transition_ignores_the_other_components_names() {
+        let mut pool = pool_state();
+        let before = pool.clone();
+        pool.delta_transition(
+            delta(
+                POOL_COMPONENT_ID,
+                vec![(WEETH_SHARES_ATTR.to_string(), Bytes::from(vec![1u8; 33]))],
+            ),
+            &HashMap::new(),
+            &Balances::default(),
+        )
+        .expect("a wrapper name leaves the pool alone");
+        assert_eq!(pool, before);
+
+        let mut wrapper = wrapper_state();
+        let before = wrapper.clone();
+        wrapper
+            .delta_transition(
+                delta(
+                    WRAPPER_COMPONENT_ID,
+                    vec![(MINT_BUCKET.capacity.to_string(), Bytes::from(vec![1u8; 9]))],
+                ),
+                &HashMap::new(),
+                &Balances::default(),
+            )
+            .expect("a pool name leaves the wrapper alone");
+        assert_eq!(wrapper, before);
+    }
+
     /// The stream decoder puts the chain head in every delta. Those names are not EtherFi
-    /// attributes, and a state that refused them would refuse every delta.
+    /// attributes and leave the state alone.
     #[test]
     fn delta_transition_accepts_the_injected_block_attributes() {
         let mut state = pool_state();
@@ -1867,27 +1904,6 @@ mod tests {
             )
             .expect("the injected names are tolerated");
         assert_eq!(state, pool_state());
-    }
-
-    #[test]
-    fn delta_transition_rejects_a_name_the_component_does_not_carry() {
-        let mut state = pool_state();
-        let before = state.clone();
-        let err = state
-            .delta_transition(
-                delta(
-                    POOL_COMPONENT_ID,
-                    vec![("totalValueInLp".to_string(), attribute(U256::from(7u64)))],
-                ),
-                &HashMap::new(),
-                &Balances::default(),
-            )
-            .unwrap_err();
-        let TransitionError::DecodeError(message) = err else {
-            panic!("expected a decode error, got {err:?}");
-        };
-        assert!(message.contains("totalValueInLp"), "{message}");
-        assert_eq!(state, before);
     }
 
     /// The ETH side has to be the address Tycho gives native ETH, not the router's
