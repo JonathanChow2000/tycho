@@ -308,8 +308,7 @@ fn block_start_balance_state(
 /// `StoreSetBigInt` serialises values as decimal strings.
 ///
 /// A value that does not decode means the store module or the runtime is broken, so this panics
-/// and names the key. The figure it returns becomes the component balance, where any stand-in
-/// for it reads as a genuine pooled ether.
+/// and names the key. The figure it returns is reported as the component balance.
 ///
 /// An empty value is the seed on `start_block`: `StoreDeltas` carries an empty `old_value` for a
 /// key's first write.

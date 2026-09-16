@@ -243,8 +243,7 @@ mod tests {
         assert_eq!(by_name["max_stake_limit"], big("150000000000000000000000"));
     }
 
-    /// The snapshot names a word for each slot, so a slot added to `TRACKED_SLOTS` without a
-    /// snapshot field is caught here rather than by a consumer missing an attribute.
+    /// The snapshot names a word for every slot in `TRACKED_SLOTS`.
     #[test]
     fn creation_attributes_cover_every_tracked_slot() {
         let names: std::collections::HashSet<_> = snapshot()

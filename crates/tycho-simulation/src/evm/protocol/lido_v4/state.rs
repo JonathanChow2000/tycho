@@ -105,8 +105,8 @@ fn attribute_width(name: &str) -> Option<usize> {
 }
 
 /// Reads a big-endian attribute, refusing one wider than its storage field. The package emits
-/// minimal-length values, so a wider one is malformed; the `Err` names the attribute so the
-/// caller can report it instead of truncating it into a plausible number.
+/// minimal-length values, so a wider one is malformed, and the `Err` names it for the caller to
+/// report.
 pub(super) fn decode_attribute(name: &str, value: &[u8]) -> Result<U256, String> {
     let Some(width) = attribute_width(name) else {
         return Err(format!("{name} is not a Lido V4 attribute"));
@@ -233,7 +233,7 @@ impl LidoV4State {
     }
 
     /// ETH -> wstETH through the wrapper's `receive()`: it submits the ETH and mints exactly the
-    /// shares `submit` returned, so the output is the share count itself, not a stETH balance.
+    /// shares `submit` returned, so the output is that share count.
     fn amount_out_eth_to_wsteth(
         &self,
         amount_in: U256,
@@ -258,10 +258,8 @@ impl LidoV4State {
         &self,
         amount_in: U256,
     ) -> Result<GetAmountOutResult, SimulationError> {
-        // Unwrapping pays out of the stETH the wrapper holds. Beyond that `wstETH.unwrap` reverts
-        // with a SafeMath underflow, and since the rate is linear nothing about a larger quote
-        // looks wrong - so reject it here rather than hand back a number that cannot settle.
-        // `get_limits` caps this direction at the same value.
+        // Unwrapping pays out of the stETH the wrapper holds. Beyond that `wstETH.unwrap`
+        // reverts with a SafeMath underflow. `get_limits` caps this direction at the same value.
         if amount_in > self.wsteth_shares {
             return Err(SimulationError::RecoverableError("WRAPPER_BALANCE_EXCEEDED".to_string()));
         }
@@ -365,10 +363,9 @@ impl ProtocolSim for LidoV4State {
         };
 
         match (base.address.as_ref(), quote.address.as_ref()) {
-            // Submitting mints shares, and the depositor holds the stETH balance those shares are
-            // worth. Derived from the share rate rather than from a `get_amount_out` probe, so the
-            // rate stays available while staking is paused or its limit is exhausted - those bound
-            // capacity, not price.
+            // Submitting mints shares, and the depositor holds the stETH balance those shares
+            // are worth. Taken from the share rate, which holds while staking is paused or its
+            // limit is exhausted: those bound capacity, not price.
             (ETH, STETH) => {
                 to_price(self.pooled_eth_by_shares(self.shares_for_pooled_eth(base_unit)?)?)
             }
@@ -388,8 +385,7 @@ impl ProtocolSim for LidoV4State {
     ) -> Result<GetAmountOutResult, SimulationError> {
         let amount_in = biguint_to_u256(&amount_in);
         // Every direction reverts on a zero amount: `submit` with ZERO_DEPOSIT, and the wrapper
-        // with its own zero-amount guards. Quoting a zero output would report the trade as
-        // settling for nothing rather than as not settling.
+        // with its own zero-amount guards.
         if amount_in.is_zero() {
             return Err(SimulationError::RecoverableError("ZERO_AMOUNT".to_string()));
         }
@@ -466,9 +462,8 @@ impl ProtocolSim for LidoV4State {
             // error against the protocol, so erroring here would accrue failures forever for two
             // directions the venue structurally cannot serve.
             (STETH, ETH) | (WSTETH, ETH) => Ok((BigUint::ZERO, BigUint::ZERO)),
-            // Anything else is a token this component does not hold. Zero would claim the venue
-            // knows the pair and has no capacity; `spot_price` and `get_amount_out` already draw
-            // this line.
+            // Anything else is a token this component does not hold, the line `spot_price` and
+            // `get_amount_out` draw as well.
             _ => Err(SimulationError::FatalError("unsupported swap".to_string())),
         }
     }
@@ -831,7 +826,7 @@ mod tests {
                 .expect("limits"),
             (BigUint::ZERO, BigUint::ZERO)
         );
-        // And a second full unwrap is refused rather than quoted again.
+        // And a second full unwrap is refused.
         assert!(drained
             .get_amount_out(max_in, &wsteth_token(), &steth_token())
             .is_err());
@@ -922,8 +917,7 @@ mod tests {
             .get_limits(Bytes::from(WSTETH_ADDRESS), Bytes::from(STETH_ADDRESS))
             .unwrap();
 
-        // Unwrapping pays out of the wrapper's stETH, so the limit is its share balance - not an
-        // unbounded sentinel, which would make callers size trades that revert on chain.
+        // Unwrapping pays out of the wrapper's stETH, so the limit is its share balance.
         assert_eq!(max_in, u256_to_biguint(sample_wsteth_shares()));
         assert_eq!(
             max_out,
@@ -1132,8 +1126,8 @@ mod tests {
         assert!(state
             .get_amount_out(max_in.clone(), &wsteth_token(), &steth_token())
             .is_ok());
-        // ... and one wei past it, it refuses rather than quoting a trade the wrapper cannot
-        // settle. `get_limits` and `get_amount_out` have to agree on the same bound.
+        // ... and one wei past it, it refuses. `get_limits` and `get_amount_out` have to agree
+        // on the same bound.
         let err = state
             .get_amount_out(max_in + BigUint::from(1u64), &wsteth_token(), &steth_token())
             .unwrap_err();
