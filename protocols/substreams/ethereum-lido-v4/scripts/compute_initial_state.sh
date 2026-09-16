@@ -65,6 +65,74 @@ if [ -z "$creation_tx" ]; then
   exit 1
 fi
 
+# Every tracked slot is verified against stETH's own getter before the snapshot is printed. The
+# slots are only meaningful for the implementation they were read from, and Lido has repacked
+# this storage twice: at block 24083113 and again for core v4 at 25603297, each time zeroing the
+# slots the previous layout used.
+STETH_IMPLEMENTATION="0x028271E30a695c0527A0C50cA30603feD004cDb0"
+WSTETH="0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0"
+FAILURES=0
+
+check() {
+  if [ "$2" != "$3" ]; then
+    echo "MISMATCH $1: chain says $2, the slots decode to $3" >&2
+    FAILURES=$((FAILURES + 1))
+  fi
+}
+
+# Decimal value of a hex slice of a 32-byte word, counted in hex characters from the left.
+slice() {
+  local word="${1#0x}"
+  cast to-dec "0x${word:$2:$3}"
+}
+
+call() {
+  cast call "$STETH_PROXY" "$1" ${2:+"$2"} --block "$BLOCK_NUMBER" --rpc-url "$RPC_URL" |
+    awk '{print $1}'
+}
+
+echo "Verifying the tracked slots against the chain..." >&2
+
+live_implementation=$(call 'implementation()(address)')
+if [ "$(echo "$live_implementation" | tr '[:upper:]' '[:lower:]')" != \
+  "$(echo "$STETH_IMPLEMENTATION" | tr '[:upper:]' '[:lower:]')" ]; then
+  echo "UPGRADED stETH: $STETH_PROXY now runs $live_implementation, not $STETH_IMPLEMENTATION." >&2
+  echo "  Re-verify every slot in src/constants.rs against the new implementation." >&2
+  FAILURES=$((FAILURES + 1))
+fi
+
+check "getTotalShares" "$(call 'getTotalShares()(uint256)')" \
+  "$(slice "$total_and_external_shares" 32 32)"
+check "getExternalShares" "$(call 'getExternalShares()(uint256)')" \
+  "$(slice "$total_and_external_shares" 0 32)"
+check "getBufferedEther" "$(call 'getBufferedEther()(uint256)')" \
+  "$(slice "$buffered_ether_and_deposited_post_report" 32 32)"
+check "sharesOf(wstETH)" "$(call 'sharesOf(address)(uint256)' "$WSTETH")" \
+  "$(slice "$wsteth_shares" 0 64)"
+
+# getTotalPooledEther() is the whole reason the first three slots are tracked, so it is checked
+# against the sum the package reconstructs rather than against any single slot.
+buffered=$(slice "$buffered_ether_and_deposited_post_report" 32 32)
+deposited=$(slice "$buffered_ether_and_deposited_post_report" 0 32)
+cl_balance=$(slice "$cl_validators_balance_and_cl_pending_balance" 32 32)
+cl_pending=$(slice "$cl_validators_balance_and_cl_pending_balance" 0 32)
+total_shares=$(slice "$total_and_external_shares" 32 32)
+external_shares=$(slice "$total_and_external_shares" 0 32)
+internal=$(echo "$buffered + $cl_balance + $cl_pending + $deposited" | bc)
+internal_shares=$(echo "$total_shares - $external_shares" | bc)
+pooled=$(echo "$internal + $external_shares * $internal / $internal_shares" | bc)
+check "getTotalPooledEther" "$(call 'getTotalPooledEther()(uint256)')" "$pooled"
+
+# getCurrentStakeLimit() bounds ETH -> stETH, unpacked from the StakeLimitUtils word.
+check "max_stake_limit" "$(call 'getCurrentStakeLimit()(uint256)')" \
+  "$(slice "$staking_state" 0 24)"
+
+if [ "$FAILURES" -gt 0 ]; then
+  echo "$FAILURES checks failed; the snapshot was not printed." >&2
+  exit 1
+fi
+echo "All tracked slots agree with the chain." >&2
+
 cat <<JSON
 {
   "start_block": $BLOCK_NUMBER,

@@ -46,6 +46,25 @@ pub const MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR: &str = "max_stake_limit_growth_blo
 pub const MAX_STAKE_LIMIT_ATTR: &str = "max_stake_limit";
 pub const WSTETH_SHARES_ATTR: &str = "wsteth_shares";
 
+/// The attributes the component carries, in the order the decoder reads them.
+pub(super) const COMPONENT_ATTRS: [&str; 11] = [
+    TOTAL_SHARES_ATTR,
+    EXTERNAL_SHARES_ATTR,
+    BUFFERED_ETHER_ATTR,
+    DEPOSITED_POST_REPORT_ATTR,
+    CL_VALIDATORS_BALANCE_ATTR,
+    CL_PENDING_BALANCE_ATTR,
+    PREV_STAKE_BLOCK_NUMBER_ATTR,
+    PREV_STAKE_LIMIT_ATTR,
+    MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR,
+    MAX_STAKE_LIMIT_ATTR,
+    WSTETH_SHARES_ATTR,
+];
+
+/// Names the stream decoder puts in every delta so a state can key off the chain head. They are
+/// not Lido attributes and carry no protocol state.
+const INJECTED_ATTRS: [&str; 2] = ["block_number", "block_timestamp"];
+
 const UINT128_MAX_EXCLUSIVE: u128 = u128::MAX;
 
 const SUBMIT_GAS: u64 = 160_000;
@@ -528,6 +547,22 @@ impl ProtocolSim for LidoV4State {
         if let Some(value) = read(MAX_STAKE_LIMIT_ATTR)? {
             next.staking_state.max_stake_limit = value;
         }
+        // A name the component does not carry is a package the simulation has drifted from: a
+        // rename, a typo, or a name nothing reads. Applying the rest would leave the value it
+        // carries frozen at whatever the snapshot held.
+        if let Some(name) = delta
+            .updated_attributes
+            .keys()
+            .find(|name| {
+                !INJECTED_ATTRS.contains(&name.as_str()) &&
+                    !COMPONENT_ATTRS.contains(&name.as_str())
+            })
+        {
+            return Err(TransitionError::DecodeError(format!(
+                "{name} is not an attribute of the Lido V4 component"
+            )));
+        }
+
         *self = next;
         Ok(())
     }
@@ -1381,5 +1416,172 @@ mod tests {
         let changed = state.apply_block(&BlockContext::new(state.execution_block_number + 1, 0));
 
         assert!(!changed);
+    }
+
+    /// Every ordered pair of the component's tokens, so a direction added later is covered here
+    /// without anyone remembering to add a case.
+    fn every_token_pair() -> Vec<(Bytes, Bytes)> {
+        let tokens = [ETH_ADDRESS, STETH_ADDRESS, WSTETH_ADDRESS];
+        let mut pairs = Vec::new();
+        for sell in tokens {
+            for buy in tokens {
+                if sell != buy {
+                    pairs.push((Bytes::from(sell), Bytes::from(buy)));
+                }
+            }
+        }
+        pairs
+    }
+
+    /// A reported limit has to be a trade the venue performs: quoting at it must succeed and
+    /// return exactly the reported output.
+    #[test]
+    fn every_reported_limit_quotes_at_its_own_size() {
+        let state = sample_state();
+        for (sell, buy) in every_token_pair() {
+            let (max_in, max_out) = state
+                .get_limits(sell.clone(), buy.clone())
+                .expect("a pair the component holds");
+            if max_in == BigUint::ZERO {
+                assert_eq!(max_out, BigUint::ZERO, "{sell:x} -> {buy:x} pays out of a zero limit");
+                continue;
+            }
+            let token_in = Token::new(&sell, "in", 18, 0, &[], Chain::Ethereum, 100);
+            let token_out = Token::new(&buy, "out", 18, 0, &[], Chain::Ethereum, 100);
+            let quoted = state
+                .get_amount_out(max_in.clone(), &token_in, &token_out)
+                .unwrap_or_else(|e| panic!("{sell:x} -> {buy:x} limit does not quote: {e:?}"));
+            assert_eq!(quoted.amount, max_out, "{sell:x} -> {buy:x} limit disagrees with quote");
+        }
+    }
+
+    /// The share rate is applied in one direction or the other, and the two are inverse up to
+    /// their rounding, so neither can be applied to a figure already in the other unit.
+    #[test]
+    fn shares_and_pooled_ether_round_trip() {
+        let state = sample_state();
+        // Each division truncates by under one unit, and the first loss is then scaled
+        // by the share rate, so a round trip can lose the rate plus one.
+        let tolerance = state
+            .pooled_eth_by_shares(U256::ONE)
+            .expect("rate") +
+            U256::from(2u8);
+        for exponent in [15u32, 18, 21, 24] {
+            let amount = U256::from(10u64).pow(U256::from(exponent));
+            let back = state
+                .pooled_eth_by_shares(
+                    state
+                        .shares_for_pooled_eth(amount)
+                        .expect("shares"),
+                )
+                .expect("amount");
+            assert!(back <= amount && amount - back <= tolerance, "amount drifted at 1e{exponent}");
+
+            let shares = U256::from(10u64).pow(U256::from(exponent));
+            let back = state
+                .shares_for_pooled_eth(
+                    state
+                        .pooled_eth_by_shares(shares)
+                        .expect("amount"),
+                )
+                .expect("shares");
+            assert!(back <= shares && shares - back <= tolerance, "shares drifted at 1e{exponent}");
+        }
+    }
+
+    /// The decoder requires every name the component carries, so a value the package emits
+    /// cannot be left unread.
+    #[tokio::test]
+    async fn decoder_requires_every_attribute_the_component_carries() {
+        assert_eq!(snapshot().state.attributes.len(), COMPONENT_ATTRS.len());
+        for name in COMPONENT_ATTRS {
+            let mut snapshot = snapshot();
+            snapshot.state.attributes.remove(name);
+            let err = try_decode_snapshot_with_defaults::<LidoV4State>(snapshot)
+                .await
+                .unwrap_err();
+            let InvalidSnapshotError::MissingAttribute(missing) = err else {
+                panic!("{name} removed but the decoder did not report it: {err:?}");
+            };
+            assert_eq!(missing, name);
+        }
+    }
+
+    /// Every name the component carries moves the state, so a delta the package sends cannot be
+    /// silently dropped and left frozen at the snapshot value.
+    #[test]
+    fn delta_transition_applies_every_attribute_the_component_carries() {
+        let base = sample_state();
+        for name in COMPONENT_ATTRS {
+            let mut state = base.clone();
+            state
+                .delta_transition(
+                    ProtocolStateDelta {
+                        component_id: STETH_COMPONENT_ID.to_string(),
+                        updated_attributes: HashMap::from([(
+                            name.to_string(),
+                            attribute(U256::from(7u64)),
+                        )]),
+                        deleted_attributes: Default::default(),
+                    },
+                    &HashMap::new(),
+                    &Balances::default(),
+                )
+                .unwrap_or_else(|e| panic!("{name} was rejected: {e:?}"));
+            assert_ne!(state, base, "{name} left the state untouched");
+        }
+    }
+
+    /// The stream decoder puts the chain head in every delta. Those names are not Lido
+    /// attributes, and a state that refused them would refuse every delta.
+    #[test]
+    fn delta_transition_accepts_the_injected_block_attributes() {
+        let mut state = sample_state();
+        state
+            .delta_transition(
+                ProtocolStateDelta {
+                    component_id: STETH_COMPONENT_ID.to_string(),
+                    updated_attributes: HashMap::from([
+                        (
+                            "block_number".to_string(),
+                            Bytes::from(24_083_114u64.to_be_bytes().to_vec()),
+                        ),
+                        (
+                            "block_timestamp".to_string(),
+                            Bytes::from(1_700_000_000u64.to_be_bytes().to_vec()),
+                        ),
+                    ]),
+                    deleted_attributes: Default::default(),
+                },
+                &HashMap::new(),
+                &Balances::default(),
+            )
+            .expect("the injected names are tolerated");
+        assert_eq!(state, sample_state());
+    }
+
+    #[test]
+    fn delta_transition_rejects_a_name_the_component_does_not_carry() {
+        let mut state = sample_state();
+        let before = state.clone();
+        let err = state
+            .delta_transition(
+                ProtocolStateDelta {
+                    component_id: STETH_COMPONENT_ID.to_string(),
+                    updated_attributes: HashMap::from([(
+                        "totalShares".to_string(),
+                        attribute(U256::from(7u64)),
+                    )]),
+                    deleted_attributes: Default::default(),
+                },
+                &HashMap::new(),
+                &Balances::default(),
+            )
+            .unwrap_err();
+        let TransitionError::DecodeError(message) = err else {
+            panic!("expected a decode error, got {err:?}");
+        };
+        assert!(message.contains("totalShares"), "{message}");
+        assert_eq!(state, before);
     }
 }
