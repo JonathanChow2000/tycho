@@ -222,8 +222,8 @@ fn attribute_width(name: &str) -> Option<usize> {
 }
 
 /// Reads a big-endian attribute, refusing one wider than its storage field. The package emits
-/// minimal-length values, so a wider one is malformed; the `Err` names the attribute so the
-/// caller can report it instead of truncating it into a plausible number.
+/// minimal-length values, so a wider one is malformed, and the `Err` names it for the caller to
+/// report.
 pub(super) fn decode_attribute(name: &str, value: &[u8]) -> Result<U256, String> {
     let Some(width) = attribute_width(name) else {
         return Err(format!("{name} is not an EtherFi attribute"));
@@ -961,7 +961,9 @@ mod tests {
         let headroom = U256::from(5u64) * U256::from(GWEI);
         state.total_value_in_lp = U256::from(u128::MAX) - headroom;
         // Keep the share rate at parity, so a deposit inside the headroom still mints shares.
-        state.total_shares = state.total_pooled_ether().expect("pooled");
+        state.total_shares = state
+            .total_pooled_ether()
+            .expect("pooled");
 
         let (max_in, _) = state
             .get_limits(Bytes::from(ETH_ADDRESS), Bytes::from(EETH_ADDRESS))

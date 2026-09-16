@@ -38,8 +38,7 @@ impl InitialState {
             .map_err(|e| anyhow!("Failed to parse EtherFi initial state: {e}"))
     }
 
-    /// Each tracked slot next to its snapshot word, so the pairing is spelled out rather than
-    /// implied by the order of two lists.
+    /// Each tracked slot with the snapshot word it decodes from.
     fn words(&self) -> [(&'static TrackedSlot, &str); 7] {
         [
             (&LIQUIDITY_POOL_VALUE_SLOT, &self.liquidity_pool_value),
