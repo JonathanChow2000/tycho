@@ -137,8 +137,9 @@ impl FallbackProtocol {
 /// Encodes a swap that runs a pAMM through `TychoFallbackRouter` so a failing pAMM retries on
 /// the fallback protocol named in the swap's `user_data` instead of reverting the route.
 ///
-/// The pAMM address comes from the component's `pamm_address` static attribute, which every
-/// fallback component carries.
+/// The pAMM address comes from the `pamm_address` static attribute of the swapped component — the
+/// pAMM component itself (`protocol_system` = `fallback:{protocol}`), not the fallback protocol's
+/// pool.
 ///
 /// # Fields
 /// * `executor_address` - The address of the executor contract that will perform the swap.
@@ -160,7 +161,7 @@ impl FallbackSwapEncoder {
             .cloned()
             .ok_or_else(|| {
                 EncodingError::FatalError(format!(
-                    "Fallback component {} is missing the {PAMM_ADDRESS_ATTRIBUTE} static \
+                    "pAMM component {} is missing the {PAMM_ADDRESS_ATTRIBUTE} static \
                      attribute",
                     component.id
                 ))
