@@ -517,8 +517,7 @@ impl ProtocolSim for EtherfiState {
         token_out: &Token,
     ) -> Result<GetAmountOutResult, SimulationError> {
         let amount_in = biguint_to_u256(&amount_in);
-        // Every entry point reverts on a zero amount. Quoting a zero output would report the
-        // trade as settling for nothing rather than as not settling.
+        // Every entry point reverts on a zero amount.
         if amount_in.is_zero() {
             return Err(SimulationError::RecoverableError("ZERO_AMOUNT".to_string()));
         }
@@ -537,8 +536,7 @@ impl ProtocolSim for EtherfiState {
     }
 
     /// The largest sell each direction settles, and what it pays. A pair this component does
-    /// not hold is an error: a zero limit would claim the venue knows the pair and has no
-    /// capacity, and hide a mis-wired component behind a skipped direction.
+    /// not hold is an error.
     fn get_limits(
         &self,
         sell_token: Bytes,
@@ -560,8 +558,7 @@ impl ProtocolSim for EtherfiState {
                 Ok((u256_to_biguint(max_in), max_out))
             }
             // Bounded by the liquidity above the low watermark, the redemption bucket and the
-            // burn bucket. Below the watermark nothing is redeemable, so report no capacity
-            // rather than a size every quote rejects.
+            // burn bucket. Below the watermark nothing is redeemable, so capacity is zero.
             (Venue::Pool(pool), EETH, ETH) => {
                 let low_watermark = self.low_watermark(pool)?;
                 if self.total_value_in_lp <= low_watermark {

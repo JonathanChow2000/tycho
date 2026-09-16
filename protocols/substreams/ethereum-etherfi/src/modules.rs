@@ -322,8 +322,7 @@ fn block_start_balance_state(
 /// `StoreSetBigInt` serialises values as decimal strings.
 ///
 /// A value that does not decode means the store module or the runtime is broken, so this panics
-/// and names the key. The figure it returns becomes a component balance, where any stand-in for
-/// it reads as genuine liquidity.
+/// and names the key. The figure it returns is reported as a component balance.
 ///
 /// An empty value is the seed on `start_block`: `StoreDeltas` carries an empty `old_value` for a
 /// key's first write.
@@ -445,8 +444,7 @@ mod tests {
         assert_eq!(keys, [LIQUIDITY_POOL_VALUE_KEY, TOTAL_SHARES_KEY, WEETH_SHARES_KEY]);
     }
 
-    /// A key's first delta carries an empty `old_value`, which means "nothing yet", not a
-    /// malformed store.
+    /// A key's first delta carries an empty `old_value`, which means "nothing yet".
     #[test]
     fn an_empty_store_value_decodes_to_zero() {
         assert_eq!(decode_store_value(TOTAL_SHARES_KEY, &[]), BigInt::zero());
@@ -462,7 +460,7 @@ mod tests {
         );
     }
 
-    /// Zero is a plausible balance, so a value that cannot be decoded must not become one.
+    /// Zero is a plausible balance, so decoding has to fail loudly.
     #[test]
     #[should_panic(expected = "unparsable value")]
     fn an_unparsable_store_value_panics_rather_than_reading_as_zero() {

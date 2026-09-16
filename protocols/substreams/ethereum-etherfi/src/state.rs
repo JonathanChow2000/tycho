@@ -97,9 +97,9 @@ pub fn big_int_from_hex(value: &str) -> Result<BigInt> {
 
 /// The raw slot values that determine the two component balances.
 ///
-/// Both balances are the protocol's own accounting rather than token balances of the component
-/// addresses: the pool reports the ETH it can pay redemptions from, and the wrapper reports the
-/// eETH its shares are worth at the current rate, which moves with every rebase.
+/// The pool reports the ETH it can pay redemptions from, and the wrapper reports the eETH its
+/// shares are worth at the current rate, which moves with every rebase. Both are the protocol's
+/// own accounting.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BalanceState {
     pub liquidity_pool_value: BigInt,
@@ -232,8 +232,7 @@ mod tests {
         assert_eq!(values["weeth_shares"], big("1934528716353929340955601"));
     }
 
-    /// Every tracked slot has a snapshot word, so a slot added to the table without one fails
-    /// here rather than as a consumer missing an attribute.
+    /// Every tracked slot has a snapshot word.
     #[test]
     fn creation_attributes_cover_every_tracked_slot() {
         let state = snapshot();
@@ -279,8 +278,8 @@ mod tests {
         assert_eq!(state.wrapper_eeth_balance(), big("2134355669936453442791966"));
     }
 
-    /// A rebase moves `totalValueOutOfLp` and nothing else; the wrapper balance has to follow
-    /// it, which is what an accumulated balance would miss.
+    /// A rebase moves `totalValueOutOfLp` and nothing else, and the wrapper balance follows
+    /// it.
     #[test]
     fn wrapper_balance_follows_a_rebase() {
         let mut state = snapshot()
