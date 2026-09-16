@@ -1760,6 +1760,12 @@ mod tests {
     #[test]
     fn share_and_amount_round_trip() {
         let state = pool_state();
+        // Each division truncates by under one unit, and the first loss is then scaled by
+        // the share rate, so a round trip can lose the rate plus one.
+        let tolerance = state
+            .amount_for_share(U256::ONE)
+            .expect("rate") +
+            U256::from(2u8);
         for exponent in [15u32, 18, 21, 24] {
             let amount = U256::from(10u64).pow(U256::from(exponent));
             let back = state
@@ -1769,7 +1775,7 @@ mod tests {
                         .expect("shares"),
                 )
                 .expect("amount");
-            assert!(amount - back <= U256::from(2u8), "amount round trip drifted at 1e{exponent}");
+            assert!(back <= amount && amount - back <= tolerance, "amount drifted at 1e{exponent}");
 
             let shares = U256::from(10u64).pow(U256::from(exponent));
             let back = state
@@ -1779,7 +1785,7 @@ mod tests {
                         .expect("amount"),
                 )
                 .expect("shares");
-            assert!(shares - back <= U256::from(2u8), "share round trip drifted at 1e{exponent}");
+            assert!(back <= shares && shares - back <= tolerance, "shares drifted at 1e{exponent}");
         }
     }
 
