@@ -195,6 +195,36 @@ fn redemption_units(amount: U256) -> Result<u64, SimulationError> {
     Ok(amount.div_ceil(scale).to::<u64>())
 }
 
+/// The attributes the pool component carries, in the order the decoder reads them.
+pub(super) const POOL_ATTRS: [&str; 18] = [
+    TOTAL_VALUE_OUT_OF_LP_ATTR,
+    TOTAL_VALUE_IN_LP_ATTR,
+    TOTAL_SHARES_ATTR,
+    REDEMPTION_BUCKET.capacity,
+    REDEMPTION_BUCKET.remaining,
+    REDEMPTION_BUCKET.last_refill,
+    REDEMPTION_BUCKET.refill_rate,
+    EXIT_FEE_SPLIT_TO_TREASURY_BPS_ATTR,
+    EXIT_FEE_BPS_ATTR,
+    LOW_WATERMARK_BPS_ATTR,
+    MINT_BUCKET.capacity,
+    MINT_BUCKET.remaining,
+    MINT_BUCKET.last_refill,
+    MINT_BUCKET.refill_rate,
+    BURN_BUCKET.capacity,
+    BURN_BUCKET.remaining,
+    BURN_BUCKET.last_refill,
+    BURN_BUCKET.refill_rate,
+];
+
+/// The attributes the wrapper component carries.
+pub(super) const WRAPPER_ATTRS: [&str; 4] =
+    [TOTAL_VALUE_OUT_OF_LP_ATTR, TOTAL_VALUE_IN_LP_ATTR, TOTAL_SHARES_ATTR, WEETH_SHARES_ATTR];
+
+/// Names the stream decoder puts in every delta so a state can key off the chain head. They are
+/// not EtherFi attributes and carry no protocol state.
+const INJECTED_ATTRS: [&str; 2] = ["block_number", "block_timestamp"];
+
 /// Bytes an attribute occupies on the wire: the width of the storage field the substreams
 /// package unpacks it from. The balances are `uint128` halves, the share counts whole words, the
 /// bucket fields `uint64` and the basis-point fields `uint16`.
@@ -462,6 +492,14 @@ impl EtherfiState {
         ))
     }
 
+    /// The names this component's deltas may carry.
+    fn attribute_names(&self) -> &'static [&'static str] {
+        match &self.venue {
+            Venue::Pool(_) => &POOL_ATTRS,
+            Venue::Wrapper(_) => &WRAPPER_ATTRS,
+        }
+    }
+
     /// What each bucket can pay at `now`; `None` for the wrapper, which has no bucket.
     fn consumable_units(&self, now: u64) -> Option<[u64; 3]> {
         match &self.venue {
@@ -674,32 +712,27 @@ impl ProtocolSim for EtherfiState {
                 if let Some(value) = read_u16(LOW_WATERMARK_BPS_ATTR)? {
                     pool.redemption.low_watermark_bps = value;
                 }
-                if attributes.contains_key(WEETH_SHARES_ATTR) {
-                    return Err(TransitionError::DecodeError(format!(
-                        "{WEETH_SHARES_ATTR} is not an attribute of the pool component"
-                    )));
-                }
             }
             Venue::Wrapper(wrapper) => {
                 if let Some(value) = read(WEETH_SHARES_ATTR)? {
                     wrapper.weeth_shares = value;
                 }
-                if let Some(name) = attributes.keys().find(|name| {
-                    attribute_width(name).is_some() &&
-                        ![
-                            TOTAL_VALUE_OUT_OF_LP_ATTR,
-                            TOTAL_VALUE_IN_LP_ATTR,
-                            TOTAL_SHARES_ATTR,
-                            WEETH_SHARES_ATTR,
-                        ]
-                        .contains(&name.as_str())
-                }) {
-                    return Err(TransitionError::DecodeError(format!(
-                        "{name} is not an attribute of the wrapper component"
-                    )));
-                }
             }
         }
+        // A name this component does not carry is a package the simulation has drifted from:
+        // a rename, a typo, or an attribute meant for the other component. Applying the rest
+        // would leave the value it carries frozen at whatever the snapshot held.
+        if let Some(name) = attributes.keys().find(|name| {
+            !INJECTED_ATTRS.contains(&name.as_str()) &&
+                !next
+                    .attribute_names()
+                    .contains(&name.as_str())
+        }) {
+            return Err(TransitionError::DecodeError(format!(
+                "{name} is not an attribute of this EtherFi component"
+            )));
+        }
+
         *self = next;
         Ok(())
     }
@@ -1641,6 +1674,214 @@ mod tests {
         assert_eq!(redemption_units(U256::from(REDEMPTION_BUCKET_UNIT * 3)).unwrap(), 3);
         let too_large = U256::from(u64::MAX) * U256::from(REDEMPTION_BUCKET_UNIT);
         assert_eq!(recoverable(redemption_units(too_large).unwrap_err()), "AMOUNT_TOO_LARGE");
+    }
+
+    /// Every pair of the tokens either component can hold, so a direction added later is
+    /// covered here without anyone remembering to add a case.
+    fn every_token_pair() -> Vec<(Bytes, Bytes)> {
+        let tokens = [ETH_ADDRESS, EETH_ADDRESS, WEETH_ADDRESS];
+        let mut pairs = Vec::new();
+        for sell in tokens {
+            for buy in tokens {
+                if sell != buy {
+                    pairs.push((Bytes::from(sell), Bytes::from(buy)));
+                }
+            }
+        }
+        pairs
+    }
+
+    /// A reported limit has to be a trade the venue performs: quoting at it must succeed and
+    /// return exactly the reported output.
+    #[test]
+    fn every_reported_limit_quotes_at_its_own_size() {
+        for state in [pool_state_with_liquidity(), wrapper_state()] {
+            for (sell, buy) in every_token_pair() {
+                let Ok((max_in, max_out)) = state.get_limits(sell.clone(), buy.clone()) else {
+                    continue;
+                };
+                if max_in == BigUint::ZERO {
+                    assert_eq!(
+                        max_out,
+                        BigUint::ZERO,
+                        "{sell:x} -> {buy:x} pays out of a zero limit"
+                    );
+                    continue;
+                }
+                let token_in = token(sell.as_ref().try_into().unwrap(), "in");
+                let token_out = token(buy.as_ref().try_into().unwrap(), "out");
+                let quoted = state
+                    .get_amount_out(max_in.clone(), &token_in, &token_out)
+                    .unwrap_or_else(|e| panic!("{sell:x} -> {buy:x} limit does not quote: {e:?}"));
+                assert_eq!(
+                    quoted.amount, max_out,
+                    "{sell:x} -> {buy:x} limit disagrees with quote"
+                );
+            }
+        }
+    }
+
+    /// A pair the component does not hold is an error in all three entry points, so a token
+    /// wired to the wrong component cannot read as a direction with no capacity.
+    #[test]
+    fn unsupported_pairs_are_refused_by_every_entry_point() {
+        let supported = [
+            (POOL_COMPONENT_ID, ETH_ADDRESS, EETH_ADDRESS),
+            (POOL_COMPONENT_ID, EETH_ADDRESS, ETH_ADDRESS),
+            (WRAPPER_COMPONENT_ID, EETH_ADDRESS, WEETH_ADDRESS),
+            (WRAPPER_COMPONENT_ID, WEETH_ADDRESS, EETH_ADDRESS),
+        ];
+        for state in [pool_state_with_liquidity(), wrapper_state()] {
+            let id = match state.venue {
+                Venue::Pool(_) => POOL_COMPONENT_ID,
+                Venue::Wrapper(_) => WRAPPER_COMPONENT_ID,
+            };
+            for (sell, buy) in every_token_pair() {
+                let sell_bytes: [u8; 20] = sell.as_ref().try_into().unwrap();
+                let buy_bytes: [u8; 20] = buy.as_ref().try_into().unwrap();
+                if supported.contains(&(id, sell_bytes, buy_bytes)) {
+                    continue;
+                }
+                assert!(matches_fatal(state.get_limits(sell.clone(), buy.clone())));
+                assert!(matches_fatal(state.get_amount_out(
+                    BigUint::from(1u64),
+                    &token(sell_bytes, "in"),
+                    &token(buy_bytes, "out")
+                )));
+                assert!(matches_fatal(
+                    state.spot_price(&token(sell_bytes, "in"), &token(buy_bytes, "out"))
+                ));
+            }
+        }
+    }
+
+    /// `sharesForAmount` and `amountForShare` are inverse up to their rounding, so neither can
+    /// be applied to a figure already in the other unit without the round trip drifting.
+    #[test]
+    fn share_and_amount_round_trip() {
+        let state = pool_state();
+        for exponent in [15u32, 18, 21, 24] {
+            let amount = U256::from(10u64).pow(U256::from(exponent));
+            let back = state
+                .amount_for_share(
+                    state
+                        .shares_for_amount(amount)
+                        .expect("shares"),
+                )
+                .expect("amount");
+            assert!(amount - back <= U256::from(2u8), "amount round trip drifted at 1e{exponent}");
+
+            let shares = U256::from(10u64).pow(U256::from(exponent));
+            let back = state
+                .shares_for_amount(
+                    state
+                        .amount_for_share(shares)
+                        .expect("amount"),
+                )
+                .expect("shares");
+            assert!(shares - back <= U256::from(2u8), "share round trip drifted at 1e{exponent}");
+        }
+    }
+
+    /// The decoder requires every name the component carries, so a value the package emits
+    /// cannot be left unread.
+    #[tokio::test]
+    async fn decoder_requires_every_attribute_the_component_carries() {
+        for (id, names, build) in [
+            (
+                POOL_COMPONENT_ID,
+                POOL_ATTRS.as_slice(),
+                pool_attributes as fn(&EtherfiState) -> HashMap<String, Bytes>,
+            ),
+            (WRAPPER_COMPONENT_ID, WRAPPER_ATTRS.as_slice(), wrapper_attributes),
+        ] {
+            let state = if id == POOL_COMPONENT_ID { pool_state() } else { wrapper_state() };
+            let full = build(&state);
+            assert_eq!(full.len(), names.len(), "{id} carries a name outside its list");
+            for name in names {
+                let mut attributes = full.clone();
+                attributes.remove(*name);
+                let err = decode(snapshot(id, attributes))
+                    .await
+                    .unwrap_err();
+                let InvalidSnapshotError::MissingAttribute(missing) = err else {
+                    panic!("{name} removed but the decoder did not report it: {err:?}");
+                };
+                assert_eq!(&missing, name);
+            }
+        }
+    }
+
+    /// Every name the component carries moves the state, so a delta the package sends cannot be
+    /// silently dropped and left frozen at the snapshot value.
+    #[test]
+    fn delta_transition_applies_every_attribute_the_component_carries() {
+        for base in [pool_state(), wrapper_state()] {
+            let id = match base.venue {
+                Venue::Pool(_) => POOL_COMPONENT_ID,
+                Venue::Wrapper(_) => WRAPPER_COMPONENT_ID,
+            };
+            for name in base.attribute_names() {
+                let mut state = base.clone();
+                // 7 fits every field and differs from every value in the fixtures.
+                state
+                    .delta_transition(
+                        delta(id, vec![(name.to_string(), attribute(U256::from(7u64)))]),
+                        &HashMap::new(),
+                        &Balances::default(),
+                    )
+                    .unwrap_or_else(|e| panic!("{name} was rejected: {e:?}"));
+                assert_ne!(state, base, "{name} left the state untouched");
+            }
+        }
+    }
+
+    /// The stream decoder puts the chain head in every delta. Those names are not EtherFi
+    /// attributes, and a state that refused them would refuse every delta.
+    #[test]
+    fn delta_transition_accepts_the_injected_block_attributes() {
+        let mut state = pool_state();
+        state
+            .delta_transition(
+                delta(
+                    POOL_COMPONENT_ID,
+                    vec![
+                        (
+                            "block_number".to_string(),
+                            Bytes::from(25_940_001u64.to_be_bytes().to_vec()),
+                        ),
+                        (
+                            "block_timestamp".to_string(),
+                            Bytes::from(BLOCK_TIMESTAMP.to_be_bytes().to_vec()),
+                        ),
+                    ],
+                ),
+                &HashMap::new(),
+                &Balances::default(),
+            )
+            .expect("the injected names are tolerated");
+        assert_eq!(state, pool_state());
+    }
+
+    #[test]
+    fn delta_transition_rejects_a_name_the_component_does_not_carry() {
+        let mut state = pool_state();
+        let before = state.clone();
+        let err = state
+            .delta_transition(
+                delta(
+                    POOL_COMPONENT_ID,
+                    vec![("totalValueInLp".to_string(), attribute(U256::from(7u64)))],
+                ),
+                &HashMap::new(),
+                &Balances::default(),
+            )
+            .unwrap_err();
+        let TransitionError::DecodeError(message) = err else {
+            panic!("expected a decode error, got {err:?}");
+        };
+        assert!(message.contains("totalValueInLp"), "{message}");
+        assert_eq!(state, before);
     }
 
     /// The ETH side has to be the address Tycho gives native ETH, not the router's

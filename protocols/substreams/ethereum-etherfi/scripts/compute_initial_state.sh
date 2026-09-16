@@ -26,8 +26,10 @@ fi
 
 LIQUIDITY_POOL="0x308861A430be4cce5502d0A12724771Fc6DaF216"
 EETH="0x35fA164735182de50811E8e2E824cFb9B6118ac2"
+WEETH="0xCd5fE23C85820F7B72D0926FC9b05b43E359b7ee"
 REDEMPTION_MANAGER="0xDadEf1fFBFeaAB4f68A9fD181395F68b4e4E7Ae0"
 RATE_LIMITER="0x6C7c54cfC2225fA985cD25F04d923B93c60a02F8"
+ETH_SENTINEL="0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
 
 # Positions as declared in src/constants.rs.
 LIQUIDITY_POOL_VALUE_POSITION="0xcf"
@@ -52,6 +54,97 @@ eth_redemption_limit=$(read_storage "$REDEMPTION_MANAGER" "$ETH_REDEMPTION_LIMIT
 eth_redemption_info=$(read_storage "$REDEMPTION_MANAGER" "$ETH_REDEMPTION_INFO_POSITION")
 eeth_mint_limit=$(read_storage "$RATE_LIMITER" "$EETH_MINT_LIMIT_POSITION")
 eeth_burn_limit=$(read_storage "$RATE_LIMITER" "$EETH_BURN_LIMIT_POSITION")
+
+# Every tracked slot is verified against the contract's own getter before the snapshot is
+# printed. The slots are only meaningful for the implementations they were read from, and the
+# proxies behind them are upgraded every few months: the escrow migration at block 25533308
+# removed a variable an earlier revision of this package tracked, and its slot became a gap that
+# still decodes to a plausible zero.
+EIP1967_IMPLEMENTATION="0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
+FAILURES=0
+
+check() {
+    local what="$1" want="$2" got="$3"
+    if [[ "${want,,}" != "${got,,}" ]]; then
+        echo "MISMATCH $what: chain says $want, the slots decode to $got" >&2
+        FAILURES=$((FAILURES + 1))
+    fi
+}
+
+check_implementation() {
+    local name="$1" proxy="$2" expected="$3"
+    local word live
+    word=$(read_storage "$proxy" "$EIP1967_IMPLEMENTATION")
+    live="0x${word: -40}"
+    if [[ "${live,,}" != "${expected,,}" ]]; then
+        echo "UPGRADED $name: $proxy now runs $live, not $expected." >&2
+        echo "  Re-verify every slot in src/constants.rs against the new implementation." >&2
+        FAILURES=$((FAILURES + 1))
+    fi
+}
+
+# Decimal value of a hex slice of a 32-byte word, counted in hex characters from the left.
+slice() {
+    local word="${1#0x}"
+    cast to-dec "0x${word:$2:$3}"
+}
+
+call() {
+    cast call "$1" "$2" ${3:+"$3"} --block "$BLOCK_NUMBER" --rpc-url "$RPC_URL" | awk '{print $1}'
+}
+
+echo "Verifying the tracked slots against the chain..." >&2
+
+check_implementation "LiquidityPool" "$LIQUIDITY_POOL" \
+    "0x17a16747d03006c9754548ac0d0aff48783a4a45"
+check_implementation "eETH" "$EETH" "0xd1901dd36cbf4a81386d0162df2707f7ddb60527"
+check_implementation "EtherFiRedemptionManager" "$REDEMPTION_MANAGER" \
+    "0x5d53b303d62a7861f88650045b8d5deb59dfb3dc"
+check_implementation "EtherFiRateLimiter" "$RATE_LIMITER" \
+    "0x9ea4d0fd09b628e23b1998f2153e27e5261b1b67"
+
+check "totalValueInLp" "$(call "$LIQUIDITY_POOL" 'totalValueInLp()(uint128)')" \
+    "$(slice "$liquidity_pool_value" 0 32)"
+check "totalValueOutOfLp" "$(call "$LIQUIDITY_POOL" 'totalValueOutOfLp()(uint128)')" \
+    "$(slice "$liquidity_pool_value" 32 32)"
+check "totalShares" "$(call "$EETH" 'totalShares()(uint256)')" \
+    "$(slice "$eeth_total_shares" 0 64)"
+check "shares(weETH)" "$(call "$EETH" 'shares(address)(uint256)' "$WEETH")" \
+    "$(slice "$weeth_shares" 0 64)"
+
+redemption_info=$(cast call "$REDEMPTION_MANAGER" \
+    'tokenToRedemptionInfo(address)(uint64,uint64,uint64,uint64,uint16,uint16,uint16)' \
+    "$ETH_SENTINEL" --block "$BLOCK_NUMBER" --rpc-url "$RPC_URL" | awk '{print $1}')
+read -r rm_capacity rm_remaining rm_last_refill rm_refill_rate rm_split rm_fee rm_watermark \
+    <<<"$(echo "$redemption_info" | tr '\n' ' ')"
+check "redemption capacity" "$rm_capacity" "$(slice "$eth_redemption_limit" 48 16)"
+check "redemption remaining" "$rm_remaining" "$(slice "$eth_redemption_limit" 32 16)"
+check "redemption lastRefill" "$rm_last_refill" "$(slice "$eth_redemption_limit" 16 16)"
+check "redemption refillRate" "$rm_refill_rate" "$(slice "$eth_redemption_limit" 0 16)"
+check "exitFeeSplitToTreasuryInBps" "$rm_split" "$(slice "$eth_redemption_info" 60 4)"
+check "exitFeeInBps" "$rm_fee" "$(slice "$eth_redemption_info" 56 4)"
+check "lowWatermarkInBpsOfTvl" "$rm_watermark" "$(slice "$eth_redemption_info" 52 4)"
+
+check_bucket() {
+    local name="$1" id="$2" word="$3" limit
+    limit=$(cast call "$RATE_LIMITER" 'getLimit(bytes32)(uint64,uint64,uint64,uint256)' "$id" \
+        --block "$BLOCK_NUMBER" --rpc-url "$RPC_URL" | awk '{print $1}')
+    local capacity remaining refill_rate last_refill
+    read -r capacity remaining refill_rate last_refill <<<"$(echo "$limit" | tr '\n' ' ')"
+    check "$name capacity" "$capacity" "$(slice "$word" 48 16)"
+    check "$name remaining" "$remaining" "$(slice "$word" 32 16)"
+    check "$name lastRefill" "$last_refill" "$(slice "$word" 16 16)"
+    check "$name refillRate" "$refill_rate" "$(slice "$word" 0 16)"
+}
+
+check_bucket "mint bucket" "$(cast keccak 'EETH_MINT_LIMIT_ID')" "$eeth_mint_limit"
+check_bucket "burn bucket" "$(cast keccak 'EETH_BURN_LIMIT_ID')" "$eeth_burn_limit"
+
+if ((FAILURES > 0)); then
+    echo "$FAILURES checks failed; the snapshot was not printed." >&2
+    exit 1
+fi
+echo "All tracked slots agree with the chain." >&2
 
 cat <<EOF
 {
