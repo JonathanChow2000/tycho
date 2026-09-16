@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
 use tycho_substreams::models::{Attribute, ChangeType};
@@ -6,11 +8,12 @@ use substreams::scalar::BigInt;
 
 use crate::{
     constants::{
-        TrackedSlot, BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY,
+        TrackedProxy, TrackedSlot, BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY,
         BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_SLOT,
         CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY,
         CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_SLOT, STAKING_STATE_SLOT,
-        TOTAL_AND_EXTERNAL_SHARES_KEY, TOTAL_AND_EXTERNAL_SHARES_SLOT, WSTETH_SHARES_SLOT,
+        TOTAL_AND_EXTERNAL_SHARES_KEY, TOTAL_AND_EXTERNAL_SHARES_SLOT, TRACKED_PROXIES,
+        WSTETH_SHARES_SLOT,
     },
     utils::{attribute_with_bytes, bytes_from_hex},
 };
@@ -24,12 +27,42 @@ pub struct InitialState {
     pub staking_state: String,
     pub wsteth_shares: String,
     pub creation_tx: String,
+    /// The implementation behind each tracked proxy at `start_block`, keyed by
+    /// [`TrackedProxy::label`]. The slots above were verified against these and no others.
+    pub implementations: HashMap<String, String>,
 }
 
 impl InitialState {
+    /// Parses the manifest params, requiring an implementation for every tracked proxy: a proxy
+    /// with none recorded could never be found upgraded.
     pub fn parse(params: &str) -> Result<Self> {
-        serde_json::from_str(params)
-            .map_err(|e| anyhow!("Failed to parse Lido V4 initial state: {e}"))
+        let state: Self = serde_json::from_str(params)
+            .map_err(|e| anyhow!("Failed to parse Lido V4 initial state: {e}"))?;
+        for proxy in TRACKED_PROXIES.iter() {
+            state.implementation_of(proxy)?;
+        }
+        Ok(state)
+    }
+
+    /// The implementation `proxy` delegated to when the snapshot was taken.
+    pub fn implementation_of(&self, proxy: &TrackedProxy) -> Result<[u8; 20]> {
+        let hex = self
+            .implementations
+            .get(proxy.label)
+            .ok_or_else(|| {
+                anyhow!("no implementation recorded for tracked proxy {}", proxy.label)
+            })?;
+        let bytes = bytes_from_hex(hex)?;
+        bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| {
+                anyhow!(
+                    "implementation of {} is {} bytes, not an address",
+                    proxy.label,
+                    bytes.len()
+                )
+            })
     }
 
     /// Every tracked slot, unpacked the same way the update path unpacks a storage write. One
@@ -195,7 +228,33 @@ mod tests {
                 .to_string(),
             creation_tx: "0x297042b4e5fd41399634f124beec7afc37712bc3374c3419b72932caf52714aa"
                 .to_string(),
+            implementations: HashMap::from([(
+                "steth".to_string(),
+                "0x028271e30a695c0527a0c50ca30603fed004cdb0".to_string(),
+            )]),
         }
+    }
+
+    /// A proxy with no recorded implementation could never be found upgraded, so the params are
+    /// refused rather than indexed without the guard.
+    #[test]
+    fn params_without_an_implementation_are_rejected() {
+        let mut state = snapshot();
+        state.implementations.clear();
+        let json = serde_json::to_string(&serde_json::json!({
+            "start_block": state.start_block,
+            "total_and_external_shares": state.total_and_external_shares,
+            "buffered_ether_and_deposited_post_report": state.buffered_ether_and_deposited_post_report,
+            "cl_validators_balance_and_cl_pending_balance": state.cl_validators_balance_and_cl_pending_balance,
+            "staking_state": state.staking_state,
+            "wsteth_shares": state.wsteth_shares,
+            "creation_tx": state.creation_tx,
+            "implementations": {},
+        }))
+        .expect("json");
+
+        let err = InitialState::parse(&json).unwrap_err();
+        assert!(err.to_string().contains("steth"), "{err}");
     }
 
     fn big(value: &str) -> BigInt {

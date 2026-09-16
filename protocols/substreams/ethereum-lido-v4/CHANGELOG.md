@@ -4,6 +4,11 @@
 
 Initial Lido integration, on the storage layout Lido core v4.0.0 introduced at block 25603297.
 
+The manifest records the stETH implementation the tracked slots were verified against. stETH is
+an Aragon proxy whose implementation lives in the Kernel, so the package watches the Kernel's
+`SetApp` for stETH's app id and pauses the component on the block that installs any other
+implementation. It stays paused until the slots are re-verified and a new snapshot is taken.
+
 One component (`0xae7a...fE84`, the stETH contract) covers the whole venue and serves four
 directions:
 

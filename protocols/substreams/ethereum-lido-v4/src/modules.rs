@@ -26,6 +26,7 @@ use crate::{
         STETH_COMPONENT_ID, TOTAL_AND_EXTERNAL_SHARES_KEY, TRACKED_SLOTS, WSTETH_ADDRESS,
     },
     state::{unpack_fields, BalanceState, InitialState},
+    upgrades::detect_upgrades,
     utils::bytes_from_hex,
 };
 
@@ -149,6 +150,9 @@ pub fn map_protocol_changes(
     } else {
         handle_state_updates(&block, &balance_deltas, &balance_store, &mut transaction_changes);
     }
+    // Every block, the snapshot block included: an implementation installed there that is not
+    // the recorded one means the snapshot itself was taken against the wrong layout.
+    pause_on_upgrade(&block, &initial_state, &mut transaction_changes)?;
 
     Ok(BlockChanges {
         block: Some((&block).into()),
@@ -255,6 +259,36 @@ fn handle_state_updates(
     }
 }
 
+/// Pauses the component on the transaction that puts a tracked proxy behind an implementation
+/// other than the one the snapshot was taken against.
+///
+/// The slots this package reads were verified for that implementation only. Attribute and
+/// balance updates keep flowing while paused, so a component un-paused after the layout is
+/// re-verified is current; a layout that did move needs a new snapshot.
+fn pause_on_upgrade(
+    block: &eth::v2::Block,
+    initial_state: &InitialState,
+    transaction_changes: &mut HashMap<u64, TransactionChangesBuilder>,
+) -> Result<()> {
+    for (tx, upgrade) in detect_upgrades(block, initial_state)? {
+        substreams::log::info!(
+            "UPGRADE {} 0x{}: implementation 0x{} installed at block {}, the snapshot was taken \
+             against 0x{}. Pausing {}.",
+            upgrade.label,
+            hex::encode(upgrade.proxy),
+            hex::encode(upgrade.installed),
+            block.number,
+            hex::encode(upgrade.recorded),
+            STETH_COMPONENT_ID,
+        );
+        let builder = transaction_changes
+            .entry(tx.index as u64)
+            .or_insert_with(|| TransactionChangesBuilder::new(&(tx.into())));
+        builder.change_component_pause_state(STETH_COMPONENT_ID, true);
+    }
+    Ok(())
+}
+
 /// Reports the component's absolute balance: `getTotalPooledEther()` in ETH.
 ///
 /// That single figure is the whole protocol. The stETH the wrapper holds is already inside it, so
@@ -324,7 +358,59 @@ fn decode_store_value(key: &str, bytes: &[u8]) -> BigInt {
 
 #[cfg(test)]
 mod tests {
+    use substreams_ethereum::pb::eth::v2::TransactionTraceStatus;
+    use tycho_substreams::models::Attribute;
+
     use super::*;
+    use crate::{
+        constants::{ARAGON_APP_BASES_NAMESPACE, STETH_APP_ID},
+        upgrades::fixtures::{block_with, initial_state, set_app, OTHER, V4},
+    };
+
+    /// The pause lands on the transaction that installed the other implementation, as the
+    /// `paused` attribute with `PausingReason::Substreams` (1) as its value.
+    #[test]
+    fn an_upgrade_pauses_the_component_on_its_transaction() {
+        let block = block_with(
+            vec![set_app(ARAGON_APP_BASES_NAMESPACE, STETH_APP_ID, OTHER)],
+            TransactionTraceStatus::Succeeded,
+        );
+        let mut transaction_changes = HashMap::new();
+
+        pause_on_upgrade(&block, &initial_state(), &mut transaction_changes).expect("pause");
+
+        let changes = transaction_changes
+            .remove(&7)
+            .expect("changes on the upgrade's transaction")
+            .build()
+            .expect("the pause is a change");
+        assert!(transaction_changes.is_empty(), "no other transaction changed");
+        let [entity] = changes.entity_changes.as_slice() else {
+            panic!("expected one entity change, got {:?}", changes.entity_changes);
+        };
+        assert_eq!(entity.component_id, STETH_COMPONENT_ID);
+        assert_eq!(
+            entity.attributes,
+            vec![Attribute {
+                name: "paused".to_string(),
+                value: vec![1u8],
+                change: ChangeType::Creation as i32,
+            }]
+        );
+    }
+
+    #[test]
+    fn installing_the_recorded_implementation_changes_nothing() {
+        let block = block_with(
+            vec![set_app(ARAGON_APP_BASES_NAMESPACE, STETH_APP_ID, V4)],
+            TransactionTraceStatus::Succeeded,
+        );
+        let mut transaction_changes = HashMap::new();
+
+        pause_on_upgrade(&block, &initial_state(), &mut transaction_changes).expect("pause");
+
+        assert!(transaction_changes.is_empty());
+    }
 
     /// Each row is reachable by its own position, so no two rows share one and no attribute is
     /// paired with the wrong slot.

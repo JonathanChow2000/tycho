@@ -28,7 +28,10 @@ params:
       "cl_validators_balance_and_cl_pending_balance": "0x00000000000000000000000000000000000000000007162e4f16cc0af69a3200",
       "staking_state": "0x00001fc3842bd1f071c000000000190000001fc383c40d61b0f6f0000186acdf",
       "wsteth_shares": "0x000000000000000000000000000000000000000000030059cedfb0543bebad72",
-      "creation_tx": "0x297042b4e5fd41399634f124beec7afc37712bc3374c3419b72932caf52714aa"
+      "creation_tx": "0x297042b4e5fd41399634f124beec7afc37712bc3374c3419b72932caf52714aa",
+      "implementations": {
+        "steth": "0x028271e30a695c0527a0c50ca30603fed004cdb0"
+      }
     }
   map_protocol_components: *initial_state
   map_protocol_changes: *initial_state

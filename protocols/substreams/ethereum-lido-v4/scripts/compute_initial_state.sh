@@ -69,7 +69,10 @@ fi
 # slots are only meaningful for the implementation they were read from, and Lido has repacked
 # this storage twice: at block 24083113 and again for core v4 at 25603297, each time zeroing the
 # slots the previous layout used.
-STETH_IMPLEMENTATION="0x028271E30a695c0527A0C50cA30603feD004cDb0"
+# The implementation the slot positions in src/constants.rs were verified against. The package
+# pauses its component when the proxy moves off the implementation the manifest records, so
+# after an upgrade: re-verify every slot, update this constant, and take a fresh snapshot.
+VERIFIED_STETH_IMPLEMENTATION="0x028271E30a695c0527A0C50cA30603feD004cDb0"
 WSTETH="0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0"
 FAILURES=0
 
@@ -95,8 +98,8 @@ echo "Verifying the tracked slots against the chain..." >&2
 
 live_implementation=$(call 'implementation()(address)')
 if [ "$(echo "$live_implementation" | tr '[:upper:]' '[:lower:]')" != \
-  "$(echo "$STETH_IMPLEMENTATION" | tr '[:upper:]' '[:lower:]')" ]; then
-  echo "UPGRADED stETH: $STETH_PROXY now runs $live_implementation, not $STETH_IMPLEMENTATION." >&2
+  "$(echo "$VERIFIED_STETH_IMPLEMENTATION" | tr '[:upper:]' '[:lower:]')" ]; then
+  echo "UPGRADED stETH: $STETH_PROXY now runs $live_implementation, not $VERIFIED_STETH_IMPLEMENTATION." >&2
   echo "  Re-verify every slot in src/constants.rs against the new implementation." >&2
   FAILURES=$((FAILURES + 1))
 fi
@@ -151,6 +154,9 @@ cat <<JSON
   "cl_validators_balance_and_cl_pending_balance": "$cl_validators_balance_and_cl_pending_balance",
   "staking_state": "$staking_state",
   "wsteth_shares": "$wsteth_shares",
-  "creation_tx": "$creation_tx"
+  "creation_tx": "$creation_tx",
+  "implementations": {
+    "steth": "$(echo "$live_implementation" | tr '[:upper:]' '[:lower:]')"
+  }
 }
 JSON

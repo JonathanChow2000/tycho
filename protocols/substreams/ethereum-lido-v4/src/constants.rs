@@ -129,3 +129,34 @@ pub const TRACKED_SLOTS: [TrackedSlot; 5] = [
     STAKING_STATE_SLOT,
     WSTETH_SHARES_SLOT,
 ];
+
+/// Lido's Aragon Kernel. stETH is an `AppProxyUpgradeable` that asks the Kernel for its
+/// implementation on every call, so an upgrade is a write to the Kernel, not to stETH.
+pub const LIDO_KERNEL_ADDRESS: [u8; 20] = hex!("b8ffc3cd6e7cf5a098a1c92f48009765b24088dc");
+/// stETH's app id in the Kernel.
+pub const STETH_APP_ID: [u8; 32] =
+    hex!("3ca7c3e38968823ccb4c78ea688df41356f182ae1d159e4ee608d30d68cef320");
+/// `keccak256("SetApp(bytes32,bytes32,address)")`: the Kernel emits it on every implementation
+/// change, with the namespace and app id indexed and the new implementation in the data.
+pub const ARAGON_SET_APP_TOPIC: [u8; 32] =
+    hex!("2ec1ae0a449b7ae354b9dacfb3ade6b6332ba26b7fcbb935835fa39dd7263b23");
+/// `keccak256("base")`: the Kernel namespace that holds app implementations.
+pub const ARAGON_APP_BASES_NAMESPACE: [u8; 32] =
+    hex!("f1f3eb40f5bc1ad1344716ced8b8a0431d840b5783aea1fd01786bc26f35ac0f");
+
+/// A proxy whose storage this package reads.
+///
+/// The tracked slots belong to the implementation recorded in the manifest's `implementations`
+/// under `label`. Another implementation may lay its storage out differently, so the component
+/// pauses on the block that installs one, until someone re-verifies the slots and records it.
+pub struct TrackedProxy {
+    pub label: &'static str,
+    pub proxy: [u8; 20],
+    pub app_id: [u8; 32],
+}
+
+pub const STETH_PROXY: TrackedProxy =
+    TrackedProxy { label: "steth", proxy: STETH_ADDRESS, app_id: STETH_APP_ID };
+
+/// Every proxy whose implementation change pauses the component. wstETH is not a proxy.
+pub const TRACKED_PROXIES: [TrackedProxy; 1] = [STETH_PROXY];
