@@ -30,7 +30,13 @@ params:
       "eth_redemption_limit": "0x0000000000005a6c000000006a8413270000000077307d560000000077359400",
       "eth_redemption_info": "0x00000000000000000000000000000000000000000000000000000064001e03e8",
       "eeth_mint_limit": "0x000000052c8c338e000000006aa1515300002460bc2c859e0000246139ca8000",
-      "eeth_burn_limit": "0x00000000677af407000000006aa0ce13000016b6f226fb9f000016bcc41e9000"
+      "eeth_burn_limit": "0x00000000677af407000000006aa0ce13000016b6f226fb9f000016bcc41e9000",
+      "implementations": {
+        "liquidity_pool": "0x17a16747d03006c9754548ac0d0aff48783a4a45",
+        "eeth": "0xd1901dd36cbf4a81386d0162df2707f7ddb60527",
+        "redemption_manager": "0x5d53b303d62a7861f88650045b8d5deb59dfb3dc",
+        "rate_limiter": "0x9ea4d0fd09b628e23b1998f2153e27e5261b1b67"
+      }
     }
   map_protocol_components: *initial_state
   map_protocol_changes: *initial_state

@@ -71,12 +71,19 @@ check() {
     fi
 }
 
+# The implementation behind an EIP-1967 proxy, lower-cased.
+implementation_of() {
+    local word
+    word=$(read_storage "$1" "$EIP1967_IMPLEMENTATION")
+    echo "0x${word: -40}" | tr '[:upper:]' '[:lower:]'
+}
+
+# The package pauses its components when a proxy moves off the implementation the manifest
+# records, so after an upgrade: re-verify every slot, update the expected address here, and take
+# a fresh snapshot.
 check_implementation() {
-    local name="$1" proxy="$2" expected="$3"
-    local word live
-    word=$(read_storage "$proxy" "$EIP1967_IMPLEMENTATION")
-    live="0x${word: -40}"
-    if [[ "${live,,}" != "${expected,,}" ]]; then
+    local name="$1" proxy="$2" live="$3" expected="$4"
+    if [[ "$live" != "${expected,,}" ]]; then
         echo "UPGRADED $name: $proxy now runs $live, not $expected." >&2
         echo "  Re-verify every slot in src/constants.rs against the new implementation." >&2
         FAILURES=$((FAILURES + 1))
@@ -95,12 +102,18 @@ call() {
 
 echo "Verifying the tracked slots against the chain..." >&2
 
-check_implementation "LiquidityPool" "$LIQUIDITY_POOL" \
+liquidity_pool_implementation=$(implementation_of "$LIQUIDITY_POOL")
+eeth_implementation=$(implementation_of "$EETH")
+redemption_manager_implementation=$(implementation_of "$REDEMPTION_MANAGER")
+rate_limiter_implementation=$(implementation_of "$RATE_LIMITER")
+
+check_implementation "LiquidityPool" "$LIQUIDITY_POOL" "$liquidity_pool_implementation" \
     "0x17a16747d03006c9754548ac0d0aff48783a4a45"
-check_implementation "eETH" "$EETH" "0xd1901dd36cbf4a81386d0162df2707f7ddb60527"
+check_implementation "eETH" "$EETH" "$eeth_implementation" \
+    "0xd1901dd36cbf4a81386d0162df2707f7ddb60527"
 check_implementation "EtherFiRedemptionManager" "$REDEMPTION_MANAGER" \
-    "0x5d53b303d62a7861f88650045b8d5deb59dfb3dc"
-check_implementation "EtherFiRateLimiter" "$RATE_LIMITER" \
+    "$redemption_manager_implementation" "0x5d53b303d62a7861f88650045b8d5deb59dfb3dc"
+check_implementation "EtherFiRateLimiter" "$RATE_LIMITER" "$rate_limiter_implementation" \
     "0x9ea4d0fd09b628e23b1998f2153e27e5261b1b67"
 
 check "totalValueInLp" "$(call "$LIQUIDITY_POOL" 'totalValueInLp()(uint128)')" \
@@ -156,6 +169,12 @@ cat <<EOF
   "eth_redemption_limit": "$eth_redemption_limit",
   "eth_redemption_info": "$eth_redemption_info",
   "eeth_mint_limit": "$eeth_mint_limit",
-  "eeth_burn_limit": "$eeth_burn_limit"
+  "eeth_burn_limit": "$eeth_burn_limit",
+  "implementations": {
+    "liquidity_pool": "$liquidity_pool_implementation",
+    "eeth": "$eeth_implementation",
+    "redemption_manager": "$redemption_manager_implementation",
+    "rate_limiter": "$rate_limiter_implementation"
+  }
 }
 EOF

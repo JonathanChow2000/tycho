@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
 use substreams::scalar::BigInt;
@@ -5,9 +7,10 @@ use tycho_substreams::models::{Attribute, ChangeType};
 
 use crate::{
     constants::{
-        Component, TrackedSlot, EETH_BURN_LIMIT_SLOT, EETH_MINT_LIMIT_SLOT, EETH_TOTAL_SHARES_SLOT,
-        ETH_REDEMPTION_INFO_SLOT, ETH_REDEMPTION_LIMIT_SLOT, LIQUIDITY_POOL_VALUE_KEY,
-        LIQUIDITY_POOL_VALUE_SLOT, TOTAL_SHARES_KEY, WEETH_SHARES_KEY, WEETH_SHARES_SLOT,
+        Component, TrackedProxy, TrackedSlot, EETH_BURN_LIMIT_SLOT, EETH_MINT_LIMIT_SLOT,
+        EETH_TOTAL_SHARES_SLOT, ETH_REDEMPTION_INFO_SLOT, ETH_REDEMPTION_LIMIT_SLOT,
+        LIQUIDITY_POOL_VALUE_KEY, LIQUIDITY_POOL_VALUE_SLOT, TOTAL_SHARES_KEY, TRACKED_PROXIES,
+        WEETH_SHARES_KEY, WEETH_SHARES_SLOT,
     },
     utils::{attribute_with_bytes, bytes_from_hex},
 };
@@ -30,12 +33,42 @@ pub struct InitialState {
     pub eth_redemption_info: String,
     pub eeth_mint_limit: String,
     pub eeth_burn_limit: String,
+    /// The implementation behind each tracked proxy at `start_block`, keyed by
+    /// [`TrackedProxy::label`]. The slots above were verified against these and no others.
+    pub implementations: HashMap<String, String>,
 }
 
 impl InitialState {
+    /// Parses the manifest params, requiring an implementation for every tracked proxy: a proxy
+    /// with none recorded could never be found upgraded.
     pub fn parse(params: &str) -> Result<Self> {
-        serde_json::from_str(params)
-            .map_err(|e| anyhow!("Failed to parse EtherFi initial state: {e}"))
+        let state: Self = serde_json::from_str(params)
+            .map_err(|e| anyhow!("Failed to parse EtherFi initial state: {e}"))?;
+        for proxy in TRACKED_PROXIES.iter() {
+            state.implementation_of(proxy)?;
+        }
+        Ok(state)
+    }
+
+    /// The implementation `proxy` delegated to when the snapshot was taken.
+    pub fn implementation_of(&self, proxy: &TrackedProxy) -> Result<[u8; 20]> {
+        let hex = self
+            .implementations
+            .get(proxy.label)
+            .ok_or_else(|| {
+                anyhow!("no implementation recorded for tracked proxy {}", proxy.label)
+            })?;
+        let bytes = bytes_from_hex(hex)?;
+        bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| {
+                anyhow!(
+                    "implementation of {} is {} bytes, not an address",
+                    proxy.label,
+                    bytes.len()
+                )
+            })
     }
 
     /// Each tracked slot with the snapshot word it decodes from.
@@ -141,8 +174,8 @@ impl BalanceState {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::{HashMap, HashSet};
+pub(crate) mod tests {
+    use std::collections::HashSet;
 
     use super::*;
     use crate::constants::TRACKED_SLOTS;
@@ -167,7 +200,46 @@ mod tests {
                 .to_string(),
             eeth_burn_limit: "0x00000000677af407000000006aa0ce13000016b6f226fb9f000016bcc41e9000"
                 .to_string(),
+            implementations: recorded_implementations(),
         }
+    }
+
+    /// The implementations behind the four proxies at block 25940000.
+    pub(crate) fn recorded_implementations() -> HashMap<String, String> {
+        [
+            ("liquidity_pool", "0x17a16747d03006c9754548ac0d0aff48783a4a45"),
+            ("eeth", "0xd1901dd36cbf4a81386d0162df2707f7ddb60527"),
+            ("redemption_manager", "0x5d53b303d62a7861f88650045b8d5deb59dfb3dc"),
+            ("rate_limiter", "0x9ea4d0fd09b628e23b1998f2153e27e5261b1b67"),
+        ]
+        .into_iter()
+        .map(|(label, implementation)| (label.to_string(), implementation.to_string()))
+        .collect()
+    }
+
+    /// A proxy with no recorded implementation could never be found upgraded, so the params are
+    /// refused rather than indexed without the guard.
+    #[test]
+    fn params_missing_an_implementation_are_rejected() {
+        let state = snapshot();
+        let mut implementations = state.implementations.clone();
+        implementations.remove("rate_limiter");
+        let json = serde_json::to_string(&serde_json::json!({
+            "start_block": state.start_block,
+            "creation_tx": state.creation_tx,
+            "liquidity_pool_value": state.liquidity_pool_value,
+            "eeth_total_shares": state.eeth_total_shares,
+            "weeth_shares": state.weeth_shares,
+            "eth_redemption_limit": state.eth_redemption_limit,
+            "eth_redemption_info": state.eth_redemption_info,
+            "eeth_mint_limit": state.eeth_mint_limit,
+            "eeth_burn_limit": state.eeth_burn_limit,
+            "implementations": implementations,
+        }))
+        .expect("json");
+
+        let err = InitialState::parse(&json).unwrap_err();
+        assert!(err.to_string().contains("rate_limiter"), "{err}");
     }
 
     fn big(value: &str) -> BigInt {

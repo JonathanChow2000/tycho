@@ -25,6 +25,7 @@ use crate::{
         TOTAL_SHARES_KEY, TRACKED_SLOTS, WEETH_ADDRESS, WEETH_SHARES_KEY,
     },
     state::{unpack_fields, BalanceState, InitialState},
+    upgrades::detect_upgrades,
     utils::bytes_from_hex,
 };
 
@@ -146,6 +147,9 @@ pub fn map_protocol_changes(
     } else {
         handle_state_updates(&block, &balance_deltas, &balance_store, &mut transaction_changes);
     }
+    // Every block, the snapshot block included: an implementation installed there that is not
+    // the recorded one means the snapshot itself was taken against the wrong layout.
+    pause_on_upgrade(&block, &initial_state, &mut transaction_changes)?;
 
     Ok(BlockChanges {
         block: Some((&block).into()),
@@ -193,6 +197,39 @@ fn initialize_protocol_components(
     add_pool_balance(builder, &balances);
     add_wrapper_balance(builder, &balances);
 
+    Ok(())
+}
+
+/// Pauses both components on the transaction that puts a tracked proxy behind an implementation
+/// other than the one the snapshot was taken against.
+///
+/// The slots this package reads were verified for those implementations only. Attribute and
+/// balance updates keep flowing while paused, so components un-paused after the layout is
+/// re-verified are current; a layout that did move needs a new snapshot.
+fn pause_on_upgrade(
+    block: &eth::v2::Block,
+    initial_state: &InitialState,
+    transaction_changes: &mut HashMap<u64, TransactionChangesBuilder>,
+) -> Result<()> {
+    for (tx, upgrade) in detect_upgrades(block, initial_state)? {
+        substreams::log::info!(
+            "UPGRADE {} 0x{}: implementation 0x{} installed at block {}, the snapshot was taken \
+             against 0x{}. Pausing {} and {}.",
+            upgrade.label,
+            hex::encode(upgrade.proxy),
+            hex::encode(upgrade.installed),
+            block.number,
+            hex::encode(upgrade.recorded),
+            Component::Pool.id(),
+            Component::Wrapper.id(),
+        );
+        let builder = transaction_changes
+            .entry(tx.index as u64)
+            .or_insert_with(|| TransactionChangesBuilder::new(&(tx.into())));
+        for component in [Component::Pool, Component::Wrapper] {
+            builder.change_component_pause_state(component.id(), true);
+        }
+    }
     Ok(())
 }
 
@@ -338,11 +375,65 @@ fn decode_store_value(key: &str, bytes: &[u8]) -> BigInt {
 
 #[cfg(test)]
 mod tests {
+    use tycho_substreams::models::Attribute;
+
     use super::*;
-    use crate::constants::{
-        EETH_TOTAL_SHARES_POSITION, LIQUIDITY_POOL_ADDRESS, LIQUIDITY_POOL_VALUE_POSITION,
-        REDEMPTION_MANAGER_ADDRESS,
+    use crate::{
+        constants::{
+            EETH_TOTAL_SHARES_POSITION, LIQUIDITY_POOL_ADDRESS, LIQUIDITY_POOL_VALUE_POSITION,
+            REDEMPTION_MANAGER_ADDRESS,
+        },
+        upgrades::fixtures::{
+            block_with, initial_state, rate_limiter_upgrade_to, OTHER, RATE_LIMITER_V1,
+        },
     };
+
+    /// The pause lands on the transaction that installed the other implementation, on both
+    /// components, as the `paused` attribute with `PausingReason::Substreams` (1) as its value.
+    #[test]
+    fn an_upgrade_pauses_both_components_on_its_transaction() {
+        let block = block_with(vec![rate_limiter_upgrade_to(OTHER)], false);
+        let mut transaction_changes = HashMap::new();
+
+        pause_on_upgrade(&block, &initial_state(), &mut transaction_changes).expect("pause");
+
+        let changes = transaction_changes
+            .remove(&7)
+            .expect("changes on the upgrade's transaction")
+            .build()
+            .expect("the pause is a change");
+        assert!(transaction_changes.is_empty(), "no other transaction changed");
+        let paused = Attribute {
+            name: "paused".to_string(),
+            value: vec![1u8],
+            change: ChangeType::Creation as i32,
+        };
+        let mut entities = changes.entity_changes;
+        entities.sort_by(|a, b| a.component_id.cmp(&b.component_id));
+        assert_eq!(
+            entities,
+            vec![
+                EntityChanges {
+                    component_id: Component::Pool.id().to_string(),
+                    attributes: vec![paused.clone()],
+                },
+                EntityChanges {
+                    component_id: Component::Wrapper.id().to_string(),
+                    attributes: vec![paused],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn writing_the_recorded_implementation_changes_nothing() {
+        let block = block_with(vec![rate_limiter_upgrade_to(RATE_LIMITER_V1)], false);
+        let mut transaction_changes = HashMap::new();
+
+        pause_on_upgrade(&block, &initial_state(), &mut transaction_changes).expect("pause");
+
+        assert!(transaction_changes.is_empty());
+    }
 
     /// Each row is reachable by its own contract and position, so no two rows share a key and
     /// no attribute is paired with the wrong slot.
