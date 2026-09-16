@@ -1128,34 +1128,20 @@ mod tests {
 
     #[test]
     fn redemption_limit_is_bounded_by_the_liquidity_above_the_floor() {
-        let mut state = pool_state_with_liquidity();
-        let pool = pool_of(&state);
-        // Floor + 10 ETH of liquidity, against a full bucket.
-        let ten_eth = U256::from(10u64) * one_eth();
-        state.total_value_in_lp = ten_eth;
-        let low_watermark = state
-            .low_watermark(&pool)
-            .expect("watermark");
-        state.total_value_in_lp = low_watermark + ten_eth;
-        // Moving `totalValueInLp` moves the floor too; settle on a fixed point.
-        for _ in 0..5 {
-            let low_watermark = state
-                .low_watermark(&pool)
-                .expect("watermark");
-            state.total_value_in_lp = low_watermark + ten_eth;
-        }
-        let low_watermark = state
-            .low_watermark(&pool)
-            .expect("watermark");
+        let mut state = pool_state();
+        // The floor is 1% of getTotalPooledEther(). These two put it at 1,000 ETH and leave
+        // exactly 10 ETH above it, which is far under both rate-limit buckets.
+        state.total_value_in_lp = U256::from(1_010u64) * one_eth();
+        state.total_value_out_of_lp = U256::from(98_990u64) * one_eth();
 
         let (max_in, _) = state
             .get_limits(Bytes::from(EETH_ADDRESS), Bytes::from(ETH_ADDRESS))
             .expect("limits");
 
-        assert_eq!(max_in, u256_to_biguint(state.total_value_in_lp - low_watermark));
+        assert_eq!(max_in, u256_to_biguint(U256::from(10u64) * one_eth()));
         state
             .get_amount_out(max_in, &eeth_token(), &eth_token())
-            .expect("a quote at the limit");
+            .expect("a quote at the reported limit");
     }
 
     #[test]
