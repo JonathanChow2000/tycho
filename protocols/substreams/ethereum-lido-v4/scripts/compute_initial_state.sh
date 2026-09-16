@@ -123,9 +123,19 @@ internal_shares=$(echo "$total_shares - $external_shares" | bc)
 pooled=$(echo "$internal + $external_shares * $internal / $internal_shares" | bc)
 check "getTotalPooledEther" "$(call 'getTotalPooledEther()(uint256)')" "$pooled"
 
-# getCurrentStakeLimit() bounds ETH -> stETH, unpacked from the StakeLimitUtils word.
-check "max_stake_limit" "$(call 'getCurrentStakeLimit()(uint256)')" \
-  "$(slice "$staking_state" 0 24)"
+# The staking word packs the four StakeLimitUtils fields that bound ETH -> stETH.
+# getStakeLimitFullInfo() returns all four, so each is checked against the slice it is unpacked
+# from. Its third return value, the limit accrued so far, is derived from them rather than
+# stored, so it is not one of the slices.
+stake_limit_info=$(cast call "$STETH_PROXY" \
+  'getStakeLimitFullInfo()(bool,bool,uint256,uint256,uint256,uint256,uint256)' \
+  --block "$BLOCK_NUMBER" --rpc-url "$RPC_URL" | awk '{print $1}')
+read -r _is_paused _is_set _current max_stake_limit max_growth_blocks prev_stake_limit \
+  prev_stake_block_number <<<"$(echo "$stake_limit_info" | tr '\n' ' ')"
+check "maxStakeLimit" "$max_stake_limit" "$(slice "$staking_state" 0 24)"
+check "maxStakeLimitGrowthBlocks" "$max_growth_blocks" "$(slice "$staking_state" 24 8)"
+check "prevStakeLimit" "$prev_stake_limit" "$(slice "$staking_state" 32 24)"
+check "prevStakeBlockNumber" "$prev_stake_block_number" "$(slice "$staking_state" 56 8)"
 
 if [ "$FAILURES" -gt 0 ]; then
   echo "$FAILURES checks failed; the snapshot was not printed." >&2
