@@ -46,25 +46,6 @@ pub const MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR: &str = "max_stake_limit_growth_blo
 pub const MAX_STAKE_LIMIT_ATTR: &str = "max_stake_limit";
 pub const WSTETH_SHARES_ATTR: &str = "wsteth_shares";
 
-/// The attributes the component carries, in the order the decoder reads them.
-pub(super) const COMPONENT_ATTRS: [&str; 11] = [
-    TOTAL_SHARES_ATTR,
-    EXTERNAL_SHARES_ATTR,
-    BUFFERED_ETHER_ATTR,
-    DEPOSITED_POST_REPORT_ATTR,
-    CL_VALIDATORS_BALANCE_ATTR,
-    CL_PENDING_BALANCE_ATTR,
-    PREV_STAKE_BLOCK_NUMBER_ATTR,
-    PREV_STAKE_LIMIT_ATTR,
-    MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR,
-    MAX_STAKE_LIMIT_ATTR,
-    WSTETH_SHARES_ATTR,
-];
-
-/// Names the stream decoder puts in every delta so a state can key off the chain head. They are
-/// not Lido attributes and carry no protocol state.
-const INJECTED_ATTRS: [&str; 2] = ["block_number", "block_timestamp"];
-
 const UINT128_MAX_EXCLUSIVE: u128 = u128::MAX;
 
 const SUBMIT_GAS: u64 = 160_000;
@@ -510,60 +491,57 @@ impl ProtocolSim for LidoV4State {
                 .map_err(TransitionError::DecodeError)
         };
 
-        // Applied to a copy so a malformed attribute leaves `self` as it was.
-        let mut next = self.clone();
-        if let Some(value) = read(TOTAL_SHARES_ATTR)? {
-            next.total_shares = value;
+        // Every attribute is decoded before the first assignment, so a width error leaves the
+        // state as it was. The pending-block path applies a delta, logs whatever it returns and
+        // quotes from the result either way (`TychoStreamDecoder::decode_pending`), so a state
+        // half way through these eleven values would be quoted from.
+        let total_shares = read(TOTAL_SHARES_ATTR)?;
+        let external_shares = read(EXTERNAL_SHARES_ATTR)?;
+        let buffered_ether = read(BUFFERED_ETHER_ATTR)?;
+        let deposited_post_report = read(DEPOSITED_POST_REPORT_ATTR)?;
+        let cl_validators_balance = read(CL_VALIDATORS_BALANCE_ATTR)?;
+        let cl_pending_balance = read(CL_PENDING_BALANCE_ATTR)?;
+        let wsteth_shares = read(WSTETH_SHARES_ATTR)?;
+        let prev_stake_block_number = read_u32(PREV_STAKE_BLOCK_NUMBER_ATTR)?;
+        let prev_stake_limit = read(PREV_STAKE_LIMIT_ATTR)?;
+        let max_stake_limit_growth_blocks = read_u32(MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR)?;
+        let max_stake_limit = read(MAX_STAKE_LIMIT_ATTR)?;
+
+        if let Some(value) = total_shares {
+            self.total_shares = value;
         }
-        if let Some(value) = read(EXTERNAL_SHARES_ATTR)? {
-            next.external_shares = value;
+        if let Some(value) = external_shares {
+            self.external_shares = value;
         }
-        if let Some(value) = read(BUFFERED_ETHER_ATTR)? {
-            next.buffered_ether = value;
+        if let Some(value) = buffered_ether {
+            self.buffered_ether = value;
         }
-        if let Some(value) = read(DEPOSITED_POST_REPORT_ATTR)? {
-            next.deposited_post_report = value;
+        if let Some(value) = deposited_post_report {
+            self.deposited_post_report = value;
         }
-        if let Some(value) = read(CL_VALIDATORS_BALANCE_ATTR)? {
-            next.cl_validators_balance = value;
+        if let Some(value) = cl_validators_balance {
+            self.cl_validators_balance = value;
         }
-        if let Some(value) = read(CL_PENDING_BALANCE_ATTR)? {
-            next.cl_pending_balance = value;
+        if let Some(value) = cl_pending_balance {
+            self.cl_pending_balance = value;
         }
-        if let Some(value) = read(WSTETH_SHARES_ATTR)? {
-            next.wsteth_shares = value;
+        if let Some(value) = wsteth_shares {
+            self.wsteth_shares = value;
         }
-        if let Some(value) = read_u32(PREV_STAKE_BLOCK_NUMBER_ATTR)? {
-            next.staking_state
+        if let Some(value) = prev_stake_block_number {
+            self.staking_state
                 .prev_stake_block_number = value;
         }
-        if let Some(value) = read(PREV_STAKE_LIMIT_ATTR)? {
-            next.staking_state.prev_stake_limit = value;
+        if let Some(value) = prev_stake_limit {
+            self.staking_state.prev_stake_limit = value;
         }
-        if let Some(value) = read_u32(MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR)? {
-            next.staking_state
+        if let Some(value) = max_stake_limit_growth_blocks {
+            self.staking_state
                 .max_stake_limit_growth_blocks = value;
         }
-        if let Some(value) = read(MAX_STAKE_LIMIT_ATTR)? {
-            next.staking_state.max_stake_limit = value;
+        if let Some(value) = max_stake_limit {
+            self.staking_state.max_stake_limit = value;
         }
-        // A name the component does not carry is a package the simulation has drifted from: a
-        // rename, a typo, or a name nothing reads. Applying the rest would leave the value it
-        // carries frozen at whatever the snapshot held.
-        if let Some(name) = delta
-            .updated_attributes
-            .keys()
-            .find(|name| {
-                !INJECTED_ATTRS.contains(&name.as_str()) &&
-                    !COMPONENT_ATTRS.contains(&name.as_str())
-            })
-        {
-            return Err(TransitionError::DecodeError(format!(
-                "{name} is not an attribute of the Lido V4 component"
-            )));
-        }
-
-        *self = next;
         Ok(())
     }
 
@@ -611,6 +589,20 @@ impl ProtocolSim for LidoV4State {
 
 #[cfg(test)]
 mod tests {
+    /// The attributes the component carries, in the order the decoder reads them.
+    pub(super) const COMPONENT_ATTRS: [&str; 11] = [
+        TOTAL_SHARES_ATTR,
+        EXTERNAL_SHARES_ATTR,
+        BUFFERED_ETHER_ATTR,
+        DEPOSITED_POST_REPORT_ATTR,
+        CL_VALIDATORS_BALANCE_ATTR,
+        CL_PENDING_BALANCE_ATTR,
+        PREV_STAKE_BLOCK_NUMBER_ATTR,
+        PREV_STAKE_LIMIT_ATTR,
+        MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR,
+        MAX_STAKE_LIMIT_ATTR,
+        WSTETH_SHARES_ATTR,
+    ];
     use std::collections::HashMap;
 
     use tycho_client::feed::BlockHeader;
@@ -1533,7 +1525,7 @@ mod tests {
     }
 
     /// The stream decoder puts the chain head in every delta. Those names are not Lido
-    /// attributes, and a state that refused them would refuse every delta.
+    /// attributes and leave the state alone.
     #[test]
     fn delta_transition_accepts_the_injected_block_attributes() {
         let mut state = sample_state();
@@ -1558,30 +1550,5 @@ mod tests {
             )
             .expect("the injected names are tolerated");
         assert_eq!(state, sample_state());
-    }
-
-    #[test]
-    fn delta_transition_rejects_a_name_the_component_does_not_carry() {
-        let mut state = sample_state();
-        let before = state.clone();
-        let err = state
-            .delta_transition(
-                ProtocolStateDelta {
-                    component_id: STETH_COMPONENT_ID.to_string(),
-                    updated_attributes: HashMap::from([(
-                        "totalShares".to_string(),
-                        attribute(U256::from(7u64)),
-                    )]),
-                    deleted_attributes: Default::default(),
-                },
-                &HashMap::new(),
-                &Balances::default(),
-            )
-            .unwrap_err();
-        let TransitionError::DecodeError(message) = err else {
-            panic!("expected a decode error, got {err:?}");
-        };
-        assert!(message.contains("totalShares"), "{message}");
-        assert_eq!(state, before);
     }
 }
