@@ -115,14 +115,10 @@ contract EmptyReservePair {
 /// and the route-level `minAmountOut` must be what catches it.
 contract SilentPool {
     function swap(
-        address,
-        /* recipient */
-        bool,
-        /* zeroForOne */
-        int256,
-        /* amountSpecified */
-        uint160,
-        /* sqrtPriceLimitX96 */
+        address, /* recipient */
+        bool, /* zeroForOne */
+        int256, /* amountSpecified */
+        uint160, /* sqrtPriceLimitX96 */
         bytes calldata /* data */
     )
         external
@@ -171,16 +167,11 @@ contract RenamedCallbackPool {
 /// @notice Accepts `tokenIn` and reports success without paying anything.
 contract SilentPropAMM {
     function swap(
-        address,
-        /* tokenIn */
-        address,
-        /* tokenOut */
-        uint256,
-        /* amountIn */
-        uint256,
-        /* minAmountOut */
-        address,
-        /* recipient */
+        address, /* tokenIn */
+        address, /* tokenOut */
+        uint256, /* amountIn */
+        uint256, /* minAmountOut */
+        address, /* recipient */
         uint256 /* deadline */
     )
         external

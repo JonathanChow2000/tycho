@@ -12,8 +12,7 @@ error PropAMMFallbackExecutor__InvalidDataLength();
 /// Uniswap V3 pool when the venue reverts.
 /// @custom:deprecated Use `FallbackExecutor`: it works for any pAMM and lets the caller name the
 /// fallback protocol (Uniswap V2/V3/V4, Curve, or Fluid V1) per swap, instead of the router
-/// owning one hardcoded Uniswap V3 mapping. Encode no new routes against this one; it is removed
-/// in a follow-up PR.
+/// owning one hardcoded Uniswap V3 mapping. Encode no new routes against this one.
 /// @dev Same calldata as `PropAMMExecutor`, different call target. Calling the venue directly lets
 /// a stale maker quote revert the whole route, which is why integrator simulations fail on routes
 /// that execute fine in a Titan block.

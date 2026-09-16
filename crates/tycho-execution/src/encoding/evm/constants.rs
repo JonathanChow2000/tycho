@@ -153,11 +153,13 @@ pub const PRICE_LEVEL_STREAM_KEY: &str = "pricelevelstream";
 /// path, so both prefixes share `PropAMMSwapEncoder` and differ only in the executor.
 ///
 /// Deprecated with `PropAMMFallbackExecutor`: encode no new routes against this family, use
-/// [`FALLBACK_PREFIX`]. Removed in a follow-up PR together with the executor.
+/// [`FALLBACK_PREFIX`] instead.
 pub const PROPAMM_FALLBACK_PREFIX: &str = "propammfallback:";
 
 /// The executor-config key serving the whole PropAMMRouter protocol family, mirroring
 /// `PRICE_LEVEL_STREAM_KEY`.
+///
+/// Deprecated with `PROPAMM_FALLBACK_PREFIX`: use [`FALLBACK_KEY`] instead.
 pub const PROPAMM_FALLBACK_KEY: &str = "propammfallback";
 
 /// Protocol system prefix for pAMM components executed through `TychoFallbackRouter`, which
