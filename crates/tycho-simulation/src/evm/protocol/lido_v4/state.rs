@@ -48,13 +48,17 @@ pub const WSTETH_SHARES_ATTR: &str = "wsteth_shares";
 
 const UINT128_MAX_EXCLUSIVE: u128 = u128::MAX;
 
-const SUBMIT_GAS: u64 = 160_000;
-/// wstETH's `receive()` runs `stETH.submit` and mints the wrapper's shares in one call. Measured
-/// on mainnet at 101,826 against 86,779 for a bare `submit`, so the wrap adds ~15,000 on top of
-/// whatever the submit path costs.
-const SUBMIT_AND_WRAP_GAS: u64 = SUBMIT_GAS + 15_000;
-const WRAP_GAS: u64 = 81_000;
-const UNWRAP_GAS: u64 = 66_000;
+// Gas each venue call costs, measured on a mainnet fork at block 25990000 from an account
+// trading for the first time, so every balance slot the call touches is cold. The 21,000
+// intrinsic and the calldata are left out: the router pays those once for the whole
+// transaction, and `estimate_gas_usage` adds the transfers around the leg separately.
+//
+// `wstETH.receive()` runs `submit` and mints the wrapper's shares in one call, which is cheaper
+// than `wrap`, where the stETH arrives by `transferFrom` and pays for the allowance slot too.
+const SUBMIT_GAS: u64 = 83_000;
+const SUBMIT_AND_WRAP_GAS: u64 = 97_000;
+const WRAP_GAS: u64 = 103_000;
+const UNWRAP_GAS: u64 = 80_000;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LidoV4State {
@@ -198,6 +202,13 @@ impl LidoV4State {
         Ok(safe_mul_u256(shares_amount, numerator)? / denominator)
     }
 
+    /// `stETH.totalSupply()`: `Lido._getTotalPooledEther()`, the internal ether plus the ether
+    /// backing shares minted outside the protocol, valued at the internal share rate.
+    fn total_pooled_ether(&self) -> Result<U256, SimulationError> {
+        let external_ether = self.pooled_eth_by_shares(self.external_shares)?;
+        safe_add_u256(self.internal_ether(), external_ether)
+    }
+
     fn amount_out_eth_to_steth(
         &self,
         amount_in: U256,
@@ -264,10 +275,12 @@ impl LidoV4State {
             return Err(SimulationError::RecoverableError("WRAPPER_BALANCE_EXCEEDED".to_string()));
         }
         let amount_out = self.pooled_eth_by_shares(amount_in)?;
-        // `unwrap` burns the caller's wstETH and sends the stETH out, so the wrapper holds that
-        // many fewer shares - which is exactly the bound above, so it has to move with it.
+        // `unwrap` burns the caller's wstETH and pays out `amount_out` stETH, and `transfer`
+        // re-derives the shares that amount is worth. Both conversions round down, so what
+        // leaves the wrapper is what the round trip resolves to.
         let mut new_state = self.clone();
-        new_state.wsteth_shares = safe_sub_u256(new_state.wsteth_shares, amount_in)?;
+        let shares_paid_out = self.shares_for_pooled_eth(amount_out)?;
+        new_state.wsteth_shares = safe_sub_u256(new_state.wsteth_shares, shares_paid_out)?;
         Ok(GetAmountOutResult::new(
             u256_to_biguint(amount_out),
             BigUint::from(UNWRAP_GAS),
@@ -422,8 +435,10 @@ impl ProtocolSim for LidoV4State {
             }
             (STETH, WSTETH) => {
                 // Wrapping mints against the caller's own stETH, so the protocol only bounds it
-                // by how much stETH exists.
-                let max_sell = self.internal_ether().min(max_input);
+                // by how much stETH exists, which is `totalSupply()`.
+                let max_sell = self
+                    .total_pooled_ether()?
+                    .min(max_input);
                 Ok((
                     u256_to_biguint(max_sell),
                     u256_to_biguint(self.shares_for_pooled_eth(max_sell)?),
@@ -761,6 +776,36 @@ mod tests {
         assert!(message.contains(TOTAL_SHARES_ATTR), "{message}");
     }
 
+    /// The width of every attribute is the width of the stETH field it is unpacked from, so each
+    /// one has to be pinned on its own: a width that is too generous accepts a value the field
+    /// cannot hold, and one that is too tight rejects a value the package legitimately emits.
+    #[test]
+    fn every_attribute_is_read_at_the_width_of_its_field() {
+        let widths: HashMap<&str, usize> = HashMap::from([
+            (TOTAL_SHARES_ATTR, 16),
+            (EXTERNAL_SHARES_ATTR, 16),
+            (BUFFERED_ETHER_ATTR, 16),
+            (DEPOSITED_POST_REPORT_ATTR, 16),
+            (CL_VALIDATORS_BALANCE_ATTR, 16),
+            (CL_PENDING_BALANCE_ATTR, 16),
+            (PREV_STAKE_BLOCK_NUMBER_ATTR, 4),
+            (MAX_STAKE_LIMIT_GROWTH_BLOCKS_ATTR, 4),
+            (PREV_STAKE_LIMIT_ATTR, 12),
+            (MAX_STAKE_LIMIT_ATTR, 12),
+            (WSTETH_SHARES_ATTR, 32),
+        ]);
+        assert_eq!(widths.len(), COMPONENT_ATTRS.len());
+
+        for name in COMPONENT_ATTRS {
+            let width = widths[name];
+            decode_attribute(name, &vec![0xffu8; width])
+                .unwrap_or_else(|e| panic!("{name} rejects a full {width}-byte field: {e}"));
+            let err = decode_attribute(name, &vec![0xffu8; width + 1])
+                .expect_err("a value wider than the field is malformed");
+            assert!(err.contains(name), "{err}");
+        }
+    }
+
     #[tokio::test]
     async fn decoder_rejects_an_unknown_component_id() {
         let mut snapshot = snapshot();
@@ -825,13 +870,18 @@ mod tests {
             .as_any()
             .downcast_ref::<LidoV4State>()
             .unwrap();
-        // `unwrap` burns the caller's wstETH and sends the stETH back out.
-        assert_eq!(unwrapped.wsteth_shares, state.wsteth_shares - biguint_to_u256(&amount_in));
+        // `unwrap` pays the stETH out and `transfer` re-derives the shares it is worth. Both
+        // conversions round down, so the wrapper keeps one wei-share of what was burnt.
+        assert_eq!(
+            unwrapped.wsteth_shares,
+            state.wsteth_shares - biguint_to_u256(&amount_in) + U256::ONE
+        );
     }
 
-    /// Draining the wrapper has to close the direction, not leave the bound where it started.
+    /// Draining the wrapper moves the bound down to what is left, which is the dust the two
+    /// roundings strand and stETH cannot pay out.
     #[test]
-    fn unwrapping_the_whole_wrapper_closes_the_direction() {
+    fn unwrapping_the_whole_wrapper_strands_the_rounding_dust() {
         let state = sample_state();
         let (max_in, _) = state
             .get_limits(Bytes::from(WSTETH_ADDRESS), Bytes::from(STETH_ADDRESS))
@@ -846,14 +896,12 @@ mod tests {
             .downcast_ref::<LidoV4State>()
             .unwrap();
 
-        assert_eq!(drained.wsteth_shares, U256::ZERO);
-        assert_eq!(
-            drained
-                .get_limits(Bytes::from(WSTETH_ADDRESS), Bytes::from(STETH_ADDRESS))
-                .expect("limits"),
-            (BigUint::ZERO, BigUint::ZERO)
-        );
-        // And a second full unwrap is refused.
+        assert_eq!(drained.wsteth_shares, U256::ONE);
+        let (drained_max_in, _) = drained
+            .get_limits(Bytes::from(WSTETH_ADDRESS), Bytes::from(STETH_ADDRESS))
+            .expect("limits");
+        assert_eq!(drained_max_in, BigUint::from(1u64));
+        // And a second unwrap of the original size is refused.
         assert!(drained
             .get_amount_out(max_in, &wsteth_token(), &steth_token())
             .is_err());
@@ -965,17 +1013,13 @@ mod tests {
             .get_limits(Bytes::from(STETH_ADDRESS), Bytes::from(WSTETH_ADDRESS))
             .unwrap();
 
-        // No more stETH can be wrapped than exists.
-        let supply = state.internal_ether();
+        // No more stETH can be wrapped than exists, and what exists is `totalSupply()`: the
+        // internal ether plus the ether backing the externally minted shares.
+        let supply = U256::from_str_radix("21803278404946205780741210", 10).expect("supply");
         assert_eq!(max_in, u256_to_biguint(supply));
-        assert_eq!(
-            max_out,
-            u256_to_biguint(
-                state
-                    .shares_for_pooled_eth(supply)
-                    .unwrap()
-            )
-        );
+        assert!(max_in > u256_to_biguint(state.internal_ether()), "external ether is missing");
+        // Wrapping the whole supply mints every share but the one the round trip rounds away.
+        assert_eq!(max_out, u256_to_biguint(state.total_shares - U256::ONE));
         assert!(max_in < u256_to_biguint(U256::from(UINT128_MAX_EXCLUSIVE) - U256::ONE));
     }
 
