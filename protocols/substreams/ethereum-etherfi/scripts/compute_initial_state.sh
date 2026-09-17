@@ -46,6 +46,11 @@ read_storage() {
 
 echo "Reading EtherFi state at block $BLOCK_NUMBER..." >&2
 
+# The components have no creation event, so they are anchored to a transaction in the start
+# block. Which one does not matter and cannot be made to: the storage below is read at the end of
+# the block, map_protocol_changes takes either the creation branch or the update branch and never
+# both, and the block need not contain any EtherFi activity to anchor to - 25940000 contains
+# none. The first transaction is taken so that a rerun at the same block reproduces the snapshot.
 creation_tx=$(cast block "$BLOCK_NUMBER" --json --rpc-url "$RPC_URL" | jq -r '.transactions[0]')
 liquidity_pool_value=$(read_storage "$LIQUIDITY_POOL" "$LIQUIDITY_POOL_VALUE_POSITION")
 eeth_total_shares=$(read_storage "$EETH" "$EETH_TOTAL_SHARES_POSITION")
