@@ -11,21 +11,14 @@ use substreams_ethereum::pb::eth::v2::{Block, TransactionTrace};
 
 use crate::{
     constants::{
-        ARAGON_APP_BASES_NAMESPACE, ARAGON_SET_APP_TOPIC, LIDO_KERNEL_ADDRESS, TRACKED_PROXIES,
+        TrackedProxy, ARAGON_APP_BASES_NAMESPACE, ARAGON_SET_APP_TOPIC, LIDO_KERNEL_ADDRESS,
+        TRACKED_PROXIES,
     },
     state::InitialState,
 };
 
-/// A tracked proxy delegating to an implementation other than the recorded one.
-#[derive(Debug, PartialEq, Eq)]
-pub struct Upgrade {
-    pub label: &'static str,
-    pub proxy: [u8; 20],
-    pub recorded: [u8; 20],
-    pub installed: [u8; 20],
-}
-
-/// Every upgrade in `block`, each with the transaction that installed it.
+/// The transactions in `block` that put a tracked proxy behind an implementation other than the
+/// recorded one, each listed once.
 ///
 /// stETH is an Aragon `AppProxyUpgradeable`: the Kernel maps `(APP_BASES_NAMESPACE, appId)` to
 /// the implementation and emits `SetApp` when the mapping changes. An install that lands on the
@@ -34,40 +27,58 @@ pub struct Upgrade {
 pub fn detect_upgrades<'a>(
     block: &'a Block,
     initial_state: &InitialState,
-) -> Result<Vec<(&'a TransactionTrace, Upgrade)>> {
-    let mut upgrades = Vec::new();
+) -> Result<Vec<&'a TransactionTrace>> {
+    let mut upgrading = Vec::new();
     for tx in block.transactions() {
-        let Some(receipt) = tx.receipt.as_ref() else {
+        if upgrades_a_tracked_proxy(tx, initial_state)? {
+            upgrading.push(tx);
+        }
+    }
+    Ok(upgrading)
+}
+
+/// Whether `tx` leaves a tracked proxy behind an implementation other than the recorded one.
+///
+/// A transaction may set the same app more than once, so what counts is the implementation the
+/// last `SetApp` leaves in place, the way the rest of the package reports the state a
+/// transaction ends in rather than the states it passes through.
+fn upgrades_a_tracked_proxy(tx: &TransactionTrace, initial_state: &InitialState) -> Result<bool> {
+    let Some(receipt) = tx.receipt.as_ref() else {
+        return Ok(false);
+    };
+    let mut installed: Vec<(&TrackedProxy, [u8; 20])> = Vec::new();
+    for log in &receipt.logs {
+        if log.address != LIDO_KERNEL_ADDRESS {
+            continue;
+        }
+        let [topic, namespace, app_id] = log.topics.as_slice() else {
             continue;
         };
-        for log in &receipt.logs {
-            if log.address != LIDO_KERNEL_ADDRESS {
+        if topic.as_slice() != ARAGON_SET_APP_TOPIC ||
+            namespace.as_slice() != ARAGON_APP_BASES_NAMESPACE
+        {
+            continue;
+        }
+        for proxy in TRACKED_PROXIES.iter() {
+            if app_id.as_slice() != proxy.app_id {
                 continue;
             }
-            let [topic, namespace, app_id] = log.topics.as_slice() else {
-                continue;
-            };
-            if topic.as_slice() != ARAGON_SET_APP_TOPIC ||
-                namespace.as_slice() != ARAGON_APP_BASES_NAMESPACE
+            let address = address_in_word(&log.data)?;
+            match installed
+                .iter_mut()
+                .find(|(tracked, _)| tracked.label == proxy.label)
             {
-                continue;
-            }
-            for proxy in TRACKED_PROXIES.iter() {
-                if app_id.as_slice() != proxy.app_id {
-                    continue;
-                }
-                let installed = address_in_word(&log.data)?;
-                let recorded = initial_state.implementation_of(proxy)?;
-                if installed != recorded {
-                    upgrades.push((
-                        tx,
-                        Upgrade { label: proxy.label, proxy: proxy.proxy, recorded, installed },
-                    ));
-                }
+                Some((_, last)) => *last = address,
+                None => installed.push((proxy, address)),
             }
         }
     }
-    Ok(upgrades)
+    for (proxy, address) in installed {
+        if address != initial_state.implementation_of(proxy)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// The address in an ABI-encoded 32-byte word.
@@ -153,7 +164,7 @@ mod tests {
     use substreams_ethereum::pb::eth::v2::TransactionTraceStatus;
 
     use super::{fixtures::*, *};
-    use crate::constants::{STETH_ADDRESS, STETH_APP_ID};
+    use crate::constants::STETH_APP_ID;
 
     /// Block 25603297 installs the implementation the snapshot was taken against, so the
     /// migration that starts the package does not pause it.
@@ -177,14 +188,10 @@ mod tests {
 
         let upgrades = detect_upgrades(&block, &initial_state()).expect("detect");
 
-        let [(tx, upgrade)] = upgrades.as_slice() else {
-            panic!("expected one upgrade, got {upgrades:?}");
+        let [tx] = upgrades.as_slice() else {
+            panic!("expected one upgrading transaction, got {}", upgrades.len());
         };
         assert_eq!(tx.index, 7);
-        assert_eq!(
-            *upgrade,
-            Upgrade { label: "steth", proxy: STETH_ADDRESS, recorded: V4, installed: OTHER }
-        );
     }
 
     /// The Kernel emits `SetApp` for every namespace and every app; only stETH's base
@@ -216,6 +223,40 @@ mod tests {
             .is_empty());
     }
 
+    /// A transaction that installs another implementation and then puts the recorded one back
+    /// ends with the layout the slots were verified against, so it is not an upgrade.
+    #[test]
+    fn a_transaction_that_restores_the_recorded_implementation_is_not_an_upgrade() {
+        let block = block_with(
+            vec![
+                set_app(ARAGON_APP_BASES_NAMESPACE, STETH_APP_ID, OTHER),
+                set_app(ARAGON_APP_BASES_NAMESPACE, STETH_APP_ID, V4),
+            ],
+            TransactionTraceStatus::Succeeded,
+        );
+        assert!(detect_upgrades(&block, &initial_state())
+            .expect("detect")
+            .is_empty());
+    }
+
+    /// The other way round is an upgrade: the transaction ends on the other implementation.
+    #[test]
+    fn a_transaction_that_ends_on_another_implementation_is_an_upgrade() {
+        let block = block_with(
+            vec![
+                set_app(ARAGON_APP_BASES_NAMESPACE, STETH_APP_ID, V4),
+                set_app(ARAGON_APP_BASES_NAMESPACE, STETH_APP_ID, OTHER),
+            ],
+            TransactionTraceStatus::Succeeded,
+        );
+        assert_eq!(
+            detect_upgrades(&block, &initial_state())
+                .expect("detect")
+                .len(),
+            1
+        );
+    }
+
     #[test]
     fn a_reverted_transaction_installs_nothing() {
         let block = block_with(
@@ -231,6 +272,16 @@ mod tests {
     fn set_app_data_that_is_not_an_address_is_an_error() {
         let mut log = set_app(ARAGON_APP_BASES_NAMESPACE, STETH_APP_ID, OTHER);
         log.data = vec![1u8; 31];
+        let block = block_with(vec![log], TransactionTraceStatus::Succeeded);
+        assert!(detect_upgrades(&block, &initial_state()).is_err());
+    }
+
+    /// A word of the right length whose top twelve bytes are not zero does not hold an address.
+    /// Taking its last twenty bytes anyway would read an arbitrary implementation out of it.
+    #[test]
+    fn set_app_data_wider_than_an_address_is_an_error() {
+        let mut log = set_app(ARAGON_APP_BASES_NAMESPACE, STETH_APP_ID, OTHER);
+        log.data = vec![0xffu8; 32];
         let block = block_with(vec![log], TransactionTraceStatus::Succeeded);
         assert!(detect_upgrades(&block, &initial_state()).is_err());
     }

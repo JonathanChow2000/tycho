@@ -96,6 +96,15 @@ pub fn store_balance_slots(params: String, block: eth::v2::Block, store: StoreSe
         return;
     }
 
+    for (ordinal, key, value) in balance_store_writes(&block) {
+        store.set(ordinal, key, &value);
+    }
+}
+
+/// Every write `block` calls for on the balance store: each stETH slot that feeds a balance,
+/// under the key it is stored as, with the word the block left there.
+fn balance_store_writes(block: &eth::v2::Block) -> Vec<(u64, &'static str, BigInt)> {
+    let mut writes = Vec::new();
     for tx in block.transactions() {
         for call in tx
             .calls
@@ -110,15 +119,16 @@ pub fn store_balance_slots(params: String, block: eth::v2::Block, store: StoreSe
                 if let Some(key) =
                     tracked_slot(&storage_change.key).and_then(|slot| slot.balance_key)
                 {
-                    store.set(
+                    writes.push((
                         storage_change.ordinal,
                         key,
-                        &BigInt::from_unsigned_bytes_be(&storage_change.new_value),
-                    );
+                        BigInt::from_unsigned_bytes_be(&storage_change.new_value),
+                    ));
                 }
             }
         }
     }
+    writes
 }
 
 /// The tracked slot at `position`, or `None` for a slot this package ignores.
@@ -270,17 +280,7 @@ fn pause_on_upgrade(
     initial_state: &InitialState,
     transaction_changes: &mut HashMap<u64, TransactionChangesBuilder>,
 ) -> Result<()> {
-    for (tx, upgrade) in detect_upgrades(block, initial_state)? {
-        substreams::log::info!(
-            "UPGRADE {} 0x{}: implementation 0x{} installed at block {}, the snapshot was taken \
-             against 0x{}. Pausing {}.",
-            upgrade.label,
-            hex::encode(upgrade.proxy),
-            hex::encode(upgrade.installed),
-            block.number,
-            hex::encode(upgrade.recorded),
-            STETH_COMPONENT_ID,
-        );
+    for tx in detect_upgrades(block, initial_state)? {
         let builder = transaction_changes
             .entry(tx.index as u64)
             .or_insert_with(|| TransactionChangesBuilder::new(&(tx.into())));
@@ -363,9 +363,120 @@ mod tests {
 
     use super::*;
     use crate::{
-        constants::{ARAGON_APP_BASES_NAMESPACE, STETH_APP_ID},
+        constants::{
+            ARAGON_APP_BASES_NAMESPACE, LIDO_KERNEL_ADDRESS, STAKING_STATE_POSITION,
+            STAKING_STATE_SLOT, STETH_APP_ID, TOTAL_AND_EXTERNAL_SHARES_POSITION,
+        },
         upgrades::fixtures::{block_with, initial_state, set_app, OTHER, V4},
     };
+
+    /// A block whose only transaction succeeds and writes `key` on `address` in one call.
+    fn block_with_storage_change(
+        address: [u8; 20],
+        key: [u8; 32],
+        state_reverted: bool,
+    ) -> eth::v2::Block {
+        eth::v2::Block {
+            number: 25_603_400,
+            transaction_traces: vec![eth::v2::TransactionTrace {
+                index: 3,
+                status: TransactionTraceStatus::Succeeded as i32,
+                calls: vec![eth::v2::Call {
+                    storage_changes: vec![eth::v2::StorageChange {
+                        address: address.to_vec(),
+                        key: key.to_vec(),
+                        new_value: vec![0x11u8; 32],
+                        ..Default::default()
+                    }],
+                    state_reverted,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn updates_for(block: &eth::v2::Block) -> HashMap<u64, TransactionChangesBuilder> {
+        let mut transaction_changes = HashMap::new();
+        handle_state_updates(
+            block,
+            &StoreDeltas::default(),
+            &StoreGetBigInt::new(0),
+            &mut transaction_changes,
+        );
+        transaction_changes
+    }
+
+    /// A live write to a tracked slot is reported against the component as an update.
+    #[test]
+    fn a_tracked_write_is_reported_as_an_update() {
+        let block = block_with_storage_change(STETH_ADDRESS, STAKING_STATE_POSITION, false);
+
+        let mut updates = updates_for(&block);
+
+        let changes = updates
+            .remove(&3)
+            .expect("changes on the writing transaction")
+            .build()
+            .expect("the write is a change");
+        let [entity] = changes.entity_changes.as_slice() else {
+            panic!("expected one entity change, got {:?}", changes.entity_changes);
+        };
+        assert_eq!(entity.component_id, STETH_COMPONENT_ID);
+        assert_eq!(entity.attributes.len(), STAKING_STATE_SLOT.fields.len());
+        for attribute in &entity.attributes {
+            assert_eq!(attribute.change, ChangeType::Update as i32);
+        }
+    }
+
+    /// Slot positions are not unique across contracts: the same position on another contract
+    /// holds something else entirely, and decoding it as stETH's would report a fabricated
+    /// value for the component.
+    #[test]
+    fn a_tracked_position_on_another_contract_is_ignored() {
+        let other = LIDO_KERNEL_ADDRESS;
+        let block = block_with_storage_change(other, STAKING_STATE_POSITION, false);
+
+        assert!(updates_for(&block).is_empty());
+    }
+
+    /// The balance store is what the reported balances are computed from, so each slot has to
+    /// reach its own key, from the right contract, on a call the chain kept.
+    #[test]
+    fn the_balance_store_takes_one_write_per_slot_that_feeds_a_balance() {
+        let staking = block_with_storage_change(STETH_ADDRESS, STAKING_STATE_POSITION, false);
+        // The staking word is reported as attributes but moves no balance.
+        assert!(balance_store_writes(&staking).is_empty());
+
+        let shares =
+            block_with_storage_change(STETH_ADDRESS, TOTAL_AND_EXTERNAL_SHARES_POSITION, false);
+        let writes = balance_store_writes(&shares);
+        let [(_, key, value)] = writes.as_slice() else {
+            panic!("expected one write, got {writes:?}");
+        };
+        assert_eq!(*key, TOTAL_AND_EXTERNAL_SHARES_KEY);
+        assert_eq!(*value, BigInt::from_unsigned_bytes_be(&[0x11u8; 32]));
+
+        let elsewhere = block_with_storage_change(
+            LIDO_KERNEL_ADDRESS,
+            TOTAL_AND_EXTERNAL_SHARES_POSITION,
+            false,
+        );
+        assert!(balance_store_writes(&elsewhere).is_empty());
+
+        let reverted =
+            block_with_storage_change(STETH_ADDRESS, TOTAL_AND_EXTERNAL_SHARES_POSITION, true);
+        assert!(balance_store_writes(&reverted).is_empty());
+    }
+
+    /// A call whose state was reverted wrote nothing the chain kept.
+    #[test]
+    fn a_reverted_call_reports_nothing() {
+        let block = block_with_storage_change(STETH_ADDRESS, STAKING_STATE_POSITION, true);
+
+        assert!(updates_for(&block).is_empty());
+    }
 
     /// The pause lands on the transaction that installed the other implementation, as the
     /// `paused` attribute with `PausingReason::Substreams` (1) as its value.

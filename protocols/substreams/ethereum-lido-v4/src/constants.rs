@@ -144,19 +144,17 @@ pub const ARAGON_SET_APP_TOPIC: [u8; 32] =
 pub const ARAGON_APP_BASES_NAMESPACE: [u8; 32] =
     hex!("f1f3eb40f5bc1ad1344716ced8b8a0431d840b5783aea1fd01786bc26f35ac0f");
 
-/// A proxy whose storage this package reads.
+/// A proxy whose storage this package reads, identified by its Kernel app id.
 ///
 /// The tracked slots belong to the implementation recorded in the manifest's `implementations`
 /// under `label`. Another implementation may lay its storage out differently, so the component
 /// pauses on the block that installs one, until someone re-verifies the slots and records it.
 pub struct TrackedProxy {
     pub label: &'static str,
-    pub proxy: [u8; 20],
     pub app_id: [u8; 32],
 }
 
-pub const STETH_PROXY: TrackedProxy =
-    TrackedProxy { label: "steth", proxy: STETH_ADDRESS, app_id: STETH_APP_ID };
+pub const STETH_PROXY: TrackedProxy = TrackedProxy { label: "steth", app_id: STETH_APP_ID };
 
 /// Every proxy whose implementation change pauses the component. wstETH is not a proxy.
 pub const TRACKED_PROXIES: [TrackedProxy; 1] = [STETH_PROXY];
