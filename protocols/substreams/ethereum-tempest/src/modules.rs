@@ -6,8 +6,8 @@ use substreams::{
     pb::substreams::StoreDeltas,
     prelude::*,
     store::{
-        Appender, StoreAdd, StoreAddBigInt, StoreAppend, StoreGet, StoreGetBigInt, StoreGetString,
-        StoreNew, StoreSet, StoreSetString,
+        Appender, StoreAppend, StoreGet, StoreGetBigInt, StoreGetString, StoreNew, StoreSet,
+        StoreSetString, StoreSetSum, StoreSetSumBigInt,
     },
 };
 use substreams_ethereum::{
@@ -21,7 +21,7 @@ use substreams_helper::event_handler::EventHandler;
 use tycho_substreams::{
     abi::erc20,
     attributes::json_serialize_address_list,
-    balances::{aggregate_balances_changes, extract_balance_deltas_from_tx},
+    balances::extract_balance_deltas_from_tx,
     block_storage::get_block_storage_changes,
     contract::extract_contract_changes_builder,
     entrypoint::create_entrypoint,
@@ -287,14 +287,27 @@ fn token_key(token: &[u8]) -> String {
     format!("token:{}", hex::encode(token))
 }
 
-/// Emits global vault token balance deltas, not component-scoped ones.
+/// Whether this block replaced an existing vault.
 ///
-/// All Tempest pairs draw on one shared vault, so inventory is tracked per token first and fanned
-/// out to components in `map_balance_deltas`. Newly tracked tokens are snapshotted once with
-/// `balanceOf`; thereafter the balance follows ERC20 `Transfer` and WETH `Deposit`/`Withdrawal`
-/// events touching the vault.
+/// The initial `VaultUpdated` at the package's `initialBlock` writes the key for the first time,
+/// so its `old_value` is empty and it is not a rotation; no components exist at that point either.
+fn vault_rotated(router_state_deltas: &StoreDeltas) -> bool {
+    router_state_deltas
+        .deltas
+        .iter()
+        .any(|delta| delta.key == VAULT_KEY && !delta.old_value.is_empty())
+}
+
+/// The vault's absolute token balances, read whenever a token needs (re)basing.
+///
+/// A token is (re)based when it is first tracked, and when the vault rotates -- the inventory then
+/// sits at a different account, so every tracked token has to be re-read rather than adjusted.
+/// These are absolute values: `store_vault_token_balances` applies them with `set`.
+///
+/// They carry the block's maximum ordinal so the `set` supersedes every `sum` in the same block.
+/// `balanceOf` reads end-of-block state, which is what makes that correct.
 #[substreams::handlers::map]
-fn map_vault_balance_deltas(
+fn map_vault_balance_snapshots(
     params: String,
     block: Block,
     token_component_deltas: StoreDeltas,
@@ -303,20 +316,12 @@ fn map_vault_balance_deltas(
     router_state_deltas: StoreDeltas,
 ) -> Result<BlockBalanceDeltas> {
     let config: Config = serde_qs::from_str(params.as_str())?;
-    let mut balance_deltas = Vec::new();
     let vault = vault_address(&router_state_store, &config);
+    let mut balance_deltas = Vec::new();
 
-    // A rotation repoints the inventory at a different account, so every tracked token has to be
-    // re-read from the new vault -- not just the ones first seen this block. The initial
-    // `VaultUpdated` at the package's `initialBlock` has an empty `old_value` and is not a
-    // rotation; no components exist yet at that point either.
-    let vault_rotated = router_state_deltas
-        .deltas
-        .iter()
-        .any(|delta| delta.key == VAULT_KEY && !delta.old_value.is_empty());
+    let vault_rotated = vault_rotated(&router_state_deltas);
 
-    // Only `token:` keys carry a token to snapshot; the catch-all component index shares this
-    // store and must be skipped.
+    // Only `token:` keys carry a token; the catch-all index keys share this store.
     let new_tokens = token_component_deltas
         .deltas
         .into_iter()
@@ -328,24 +333,22 @@ fn map_vault_balance_deltas(
                 .map(str::to_string)
         })
         .collect::<HashSet<_>>();
-    let snapshot_tokens: HashSet<String> = if vault_rotated {
+
+    let tokens: HashSet<String> = if vault_rotated {
         new_tokens
-            .iter()
-            .cloned()
+            .into_iter()
             .chain(known_tokens(&token_components_store))
             .collect()
     } else {
         new_tokens
     };
-    let last_tx = block
-        .transaction_traces
-        .last()
-        .map(Transaction::from);
 
-    for token_hex in &snapshot_tokens {
-        let Some(tx) = &last_tx else {
-            continue;
-        };
+    let Some(last_trace) = block.transaction_traces.last() else {
+        return Ok(BlockBalanceDeltas { balance_deltas });
+    };
+    let tx: Transaction = last_trace.into();
+
+    for token_hex in &tokens {
         let token = hex::decode(token_hex)?;
         // A failed `balanceOf` means the token is not a conforming ERC20. Seeding zero keeps the
         // stream alive for the other pairs rather than halting every component on one bad token,
@@ -357,7 +360,7 @@ fn map_vault_balance_deltas(
                 BigInt::zero()
             });
         balance_deltas.push(BalanceDelta {
-            ord: tx.index,
+            ord: last_trace.end_ordinal,
             tx: Some(tx.clone()),
             token,
             delta: balance.to_signed_bytes_be(),
@@ -365,138 +368,58 @@ fn map_vault_balance_deltas(
         });
     }
 
-    // `extract_balance_deltas_from_tx` credits and debits independently, so a vault-to-vault
-    // transfer nets to zero instead of only debiting, and WETH `Deposit`/`Withdrawal` are covered
-    // the same way. It tags each delta with the transactor address; the fan-out to components
-    // happens in `map_balance_deltas`, so the tag is dropped here.
-    let vault_token_deltas: Vec<_> = block
+    Ok(BlockBalanceDeltas { balance_deltas })
+}
+
+/// The vault's relative token balance movements for this block.
+///
+/// `extract_balance_deltas_from_tx` credits and debits independently, so a vault-to-vault transfer
+/// nets to zero instead of only debiting, and WETH `Deposit`/`Withdrawal` are covered the same way.
+/// It tags each delta with the transactor address; the tag is dropped because these are vault-wide.
+/// `store_vault_token_balances` applies them with `sum`.
+#[substreams::handlers::map]
+fn map_vault_balance_deltas(
+    params: String,
+    block: Block,
+    router_state_store: StoreGetString,
+) -> Result<BlockBalanceDeltas> {
+    let config: Config = serde_qs::from_str(params.as_str())?;
+    let vault = vault_address(&router_state_store, &config);
+
+    let balance_deltas = block
         .transactions()
         .flat_map(|trx| {
             extract_balance_deltas_from_tx(trx, |_token, address| address == vault.as_slice())
         })
+        .map(|delta| BalanceDelta { component_id: vec![], ..delta })
+        .sorted_unstable_by_key(|delta| delta.ord)
         .collect();
 
-    for delta in vault_token_deltas {
-        let BalanceDelta { ord, tx, token, delta, .. } = delta;
-        // Tokens snapshotted with `balanceOf` above -- those tracked for the first time in this
-        // block, and every token when the vault rotated -- already reflect this block's
-        // movements. Applying the deltas too would double-count.
-        if snapshot_tokens.contains(&hex::encode(&token)) {
-            continue;
-        }
-
-        // The vault may hold tokens that belong to no registered pair. Only emit deltas for tokens
-        // mapped to at least one component.
-        if token_components_store
-            .get_last(token_key(&token))
-            .is_none()
-        {
-            continue;
-        }
-
-        balance_deltas.push(BalanceDelta {
-            ord,
-            tx,
-            token,
-            delta,
-            // Global vault deltas are not component-scoped yet; `map_balance_deltas` fans them out.
-            component_id: vec![],
-        });
-    }
-
-    balance_deltas.sort_unstable_by_key(|delta| delta.ord);
     Ok(BlockBalanceDeltas { balance_deltas })
 }
 
+/// The vault's balance per token, keyed by token.
+///
+/// `set_sum` lets the two kinds of change coexist: a rebase replaces the value outright, a movement
+/// adjusts it. Under a plain `add` store an absolute snapshot would be added to whatever the store
+/// already held, which doubles the inventory on a vault rotation instead of repointing it.
 #[substreams::handlers::store]
-fn store_vault_token_balances(mut deltas: BlockBalanceDeltas, store: StoreAddBigInt) {
-    deltas
-        .balance_deltas
-        .sort_unstable_by_key(|delta| delta.ord);
-
+fn store_vault_token_balances(
+    snapshots: BlockBalanceDeltas,
+    deltas: BlockBalanceDeltas,
+    store: StoreSetSumBigInt,
+) {
     for delta in deltas.balance_deltas {
-        store.add(delta.ord, hex::encode(&delta.token), BigInt::from_signed_bytes_be(&delta.delta));
+        store.sum(delta.ord, hex::encode(&delta.token), BigInt::from_signed_bytes_be(&delta.delta));
     }
-}
-
-/// Projects global vault token balances onto every component that trades the token.
-#[substreams::handlers::map]
-fn map_balance_deltas(
-    components: BlockEntityChanges,
-    vault_balance_deltas: BlockBalanceDeltas,
-    vault_balance_store: StoreGetBigInt,
-    token_components_store: StoreGetString,
-) -> Result<BlockBalanceDeltas> {
-    let mut balance_deltas = Vec::new();
-    let mut new_component_ids_by_token = HashMap::<Vec<u8>, HashSet<String>>::new();
-
-    // Component balances are keyed by component id, so a new component needs an initial entry for
-    // both its tokens. `vault_balance_deltas` only covers tokens that moved this block and would
-    // miss the rest, so seed new components from the accumulated global vault balance instead.
-    for tx_changes in components.changes {
-        let Some(tx) = tx_changes.tx else {
-            continue;
-        };
-
-        for component in tx_changes.component_changes {
-            for token in component.tokens {
-                new_component_ids_by_token
-                    .entry(token.clone())
-                    .or_default()
-                    .insert(component.id.clone());
-
-                let balance = vault_balance_store
-                    .get_last(hex::encode(&token))
-                    .unwrap_or_else(BigInt::zero);
-                balance_deltas.push(BalanceDelta {
-                    ord: tx.index,
-                    tx: Some(tx.clone()),
-                    token,
-                    delta: balance.to_signed_bytes_be(),
-                    component_id: component.id.as_bytes().to_vec(),
-                });
-            }
-        }
+    // Applied after the sums by virtue of carrying the block's maximum ordinal.
+    for snapshot in snapshots.balance_deltas {
+        store.set(
+            snapshot.ord,
+            hex::encode(&snapshot.token),
+            BigInt::from_signed_bytes_be(&snapshot.delta),
+        );
     }
-
-    // Fan global token movements out to existing components. Components created in this block are
-    // skipped: the snapshot above already includes this block's movements.
-    for token_delta in vault_balance_deltas.balance_deltas {
-        let Some(component_ids) = token_components_store.get_last(token_key(&token_delta.token))
-        else {
-            continue;
-        };
-        let new_component_ids = new_component_ids_by_token.get(&token_delta.token);
-
-        for id in component_ids
-            .split(';')
-            .filter(|id| !id.is_empty())
-            .unique()
-        {
-            if new_component_ids
-                .map(|ids| ids.contains(id))
-                .unwrap_or(false)
-            {
-                continue;
-            }
-
-            balance_deltas.push(BalanceDelta {
-                ord: token_delta.ord,
-                tx: token_delta.tx.clone(),
-                token: token_delta.token.clone(),
-                delta: token_delta.delta.clone(),
-                component_id: id.as_bytes().to_vec(),
-            });
-        }
-    }
-
-    balance_deltas.sort_unstable_by_key(|delta| delta.ord);
-    Ok(BlockBalanceDeltas { balance_deltas })
-}
-
-#[substreams::handlers::store]
-pub fn store_balances(deltas: BlockBalanceDeltas, store: StoreAddBigInt) {
-    tycho_substreams::balances::store_balance_changes(deltas, store);
 }
 
 #[substreams::handlers::map]
@@ -508,16 +431,21 @@ fn map_protocol_changes(
     pair_registered_deltas: StoreDeltas,
     component_index_store: StoreGetString,
     router_state_store: StoreGetString,
-    // Component-scoped, despite being derived from the shared vault's token balances: the deltas
-    // arrive from `map_balance_deltas`/`store_balances`, which have already fanned the vault's
-    // per-token movements out to every component that trades the token.
-    component_balance_deltas: BlockBalanceDeltas,
-    component_balance_store_deltas: StoreDeltas,
+    token_components_store: StoreGetString,
+    // Which tokens moved this block; the values come from the `get` view below. All Tempest pairs
+    // draw on one shared vault, so a token's balance is vault-wide and is fanned out here to every
+    // component that trades it.
+    vault_balance_deltas: StoreDeltas,
+    vault_balance_store: StoreGetBigInt,
 ) -> Result<BlockChanges, substreams::errors::Error> {
     let config: Config = serde_qs::from_str(params.as_str())?;
     let mut pending_creation = first_registrations(pair_registered_deltas);
     let mut transaction_changes: HashMap<_, TransactionChangesBuilder> = HashMap::new();
     let paused = router_paused(&router_state_store);
+    // Components created in this block, and the transaction that created each. They need opening
+    // balances even when neither of their tokens moved.
+    let mut created_components: HashMap<String, Vec<Vec<u8>>> = HashMap::new();
+    let mut created_component_txs: HashMap<String, Transaction> = HashMap::new();
 
     for tx_changes in components.changes {
         let Some(tycho_tx) = tx_changes.tx else {
@@ -530,6 +458,8 @@ fn map_protocol_changes(
         for component in &tx_changes.component_changes {
             builder.add_protocol_component(component);
             add_entrypoints(builder, &config, component);
+            created_components.insert(component.id.clone(), component.tokens.clone());
+            created_component_txs.insert(component.id.clone(), tycho_tx.clone());
         }
         for entity_change in &tx_changes.entity_changes {
             builder.add_entity_change(entity_change);
@@ -663,21 +593,68 @@ fn map_protocol_changes(
         }
     }
 
-    aggregate_balances_changes(component_balance_store_deltas, component_balance_deltas)
-        .into_iter()
-        .for_each(|(_, (tx, balances))| {
+    // Balances are absolute in the tycho API, so they are read straight from the vault store
+    // rather than accumulated a second time per component. The vault itself is in no component's
+    // contract set, so an account-scoped balance keyed by it would be filtered out of the pool;
+    // simulation reaches the inventory through `balance_owner`.
+    let last_tx: Option<Transaction> = block
+        .transaction_traces
+        .last()
+        .map(Into::into);
+    let emit = |builder: &mut TransactionChangesBuilder, id: &str, token: &[u8]| {
+        let balance = vault_balance_store
+            .get_last(hex::encode(token))
+            .unwrap_or_else(BigInt::zero);
+        builder.add_balance_change(&BalanceChange {
+            token: token.to_vec(),
+            balance: balance.to_signed_bytes_be(),
+            component_id: id.as_bytes().to_vec(),
+        });
+    };
+
+    // A component created in a block where neither of its tokens moved still needs its opening
+    // balances, and the store already holds them.
+    for (id, tokens) in &created_components {
+        let Some(tx) = created_component_txs.get(id) else {
+            continue;
+        };
+        let builder = transaction_changes
+            .entry(tx.index)
+            .or_insert_with(|| TransactionChangesBuilder::new(tx));
+        for token in tokens {
+            emit(builder, id, token);
+        }
+    }
+
+    if let Some(tx) = last_tx {
+        let changed_tokens = vault_balance_deltas
+            .deltas
+            .iter()
+            .map(|delta| delta.key.clone())
+            .unique()
+            .collect::<Vec<_>>();
+        for token_hex in changed_tokens {
+            let Ok(token) = hex::decode(&token_hex) else {
+                continue;
+            };
+            let Some(component_ids) = token_components_store.get_last(token_key(&token)) else {
+                continue;
+            };
             let builder = transaction_changes
                 .entry(tx.index)
                 .or_insert_with(|| TransactionChangesBuilder::new(&tx));
-            // Only component-scoped balances are emitted. The vault is not in any component's
-            // contract set, so account-scoped balances keyed by it would be filtered out of the
-            // pool anyway; simulation reaches the inventory through `balance_owner`.
-            for token_balance_map in balances.values() {
-                for balance_change in token_balance_map.values() {
-                    builder.add_balance_change(balance_change);
+            for id in component_ids
+                .split(';')
+                .filter(|id| !id.is_empty())
+                .unique()
+            {
+                if created_components.contains_key(id) {
+                    continue;
                 }
+                emit(builder, id, &token);
             }
-        });
+        }
+    }
 
     extract_contract_changes_builder(
         &block,
@@ -852,26 +829,22 @@ mod tests {
         assert_eq!(pause_transition(&mut pending, id, false), Some(true));
     }
 
-    /// An existing component re-registered in a later block has no pending creation, so the very
-    /// first registration it sees must lift the pause.
     /// A rotation must be detected from the store delta so that every tracked token is
     /// re-snapshotted against the new vault. The initialisation write is not a rotation.
     #[test]
-    fn test_vault_rotation_detected_from_deltas() {
-        let rotated = |deltas: Vec<StoreDelta>| {
-            deltas
-                .iter()
-                .any(|d| d.key == VAULT_KEY && !d.old_value.is_empty())
-        };
-
+    fn test_vault_rotated() {
         // Initialisation: address(0) -> vault, written for the first time.
-        assert!(!rotated(vec![delta(VAULT_KEY, "", "c9d748e6")]));
+        assert!(!vault_rotated(&StoreDeltas { deltas: vec![delta(VAULT_KEY, "", "c9d748e6")] }));
         // Rotation: an existing vault replaced.
-        assert!(rotated(vec![delta(VAULT_KEY, "c9d748e6", "deadbeef")]));
+        assert!(vault_rotated(&StoreDeltas {
+            deltas: vec![delta(VAULT_KEY, "c9d748e6", "deadbeef")]
+        }));
         // An unrelated key changing is not a rotation.
-        assert!(!rotated(vec![delta(PAUSED_KEY, "0", "1")]));
+        assert!(!vault_rotated(&StoreDeltas { deltas: vec![delta(PAUSED_KEY, "0", "1")] }));
     }
 
+    /// An existing component re-registered in a later block has no pending creation, so the very
+    /// first registration it sees must lift the pause.
     #[test]
     fn test_pause_transition_reregistration_without_pending_creation() {
         let mut pending: HashSet<String> = HashSet::new();

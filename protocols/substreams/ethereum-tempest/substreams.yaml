@@ -27,6 +27,7 @@ params:
   map_protocol_components: &tempest_params "router_address=00000003f1ec2379e79f58e12ec6c4f51ee92149&vault_address=c9d748e601d9984a43da0b80e5b91dc28d31d9fb&registry_address=DA7AFeEd01fe625cF15D187A19F94B45F00b8C5f"
   store_pair_registered: *tempest_params
   store_router_state: *tempest_params
+  map_vault_balance_snapshots: *tempest_params
   map_vault_balance_deltas: *tempest_params
   map_protocol_changes: *tempest_params
 
@@ -72,7 +73,7 @@ modules:
     inputs:
       - map: map_protocol_components
 
-  - name: map_vault_balance_deltas
+  - name: map_vault_balance_snapshots
     kind: map
     initialBlock: *initial_block
     inputs:
@@ -89,31 +90,26 @@ modules:
     output:
       type: proto:tycho.evm.v1.BlockBalanceDeltas
 
-  - name: store_vault_token_balances
-    kind: store
-    updatePolicy: add
-    valueType: bigint
-    inputs:
-      - map: map_vault_balance_deltas
-
-  - name: map_balance_deltas
+  - name: map_vault_balance_deltas
     kind: map
+    initialBlock: *initial_block
     inputs:
-      - map: map_protocol_components
-      - map: map_vault_balance_deltas
-      - store: store_vault_token_balances
-        mode: get
-      - store: store_component_index
+      - params: string
+      - source: sf.ethereum.type.v2.Block
+      - store: store_router_state
         mode: get
     output:
       type: proto:tycho.evm.v1.BlockBalanceDeltas
 
-  - name: store_balances
+  # `set_sum` so a rebase replaces the value and a movement adjusts it; under `add` an absolute
+  # snapshot would be added to the stored value and double the inventory on a vault rotation.
+  - name: store_vault_token_balances
     kind: store
-    updatePolicy: add
+    updatePolicy: set_sum
     valueType: bigint
     inputs:
-      - map: map_balance_deltas
+      - map: map_vault_balance_snapshots
+      - map: map_vault_balance_deltas
 
   - name: map_protocol_changes
     kind: map
@@ -130,8 +126,11 @@ modules:
         mode: get
       - store: store_router_state
         mode: get
-      - map: map_balance_deltas
-      - store: store_balances
+      - store: store_component_index
+        mode: get
+      - store: store_vault_token_balances
         mode: deltas
+      - store: store_vault_token_balances
+        mode: get
     output:
       type: proto:tycho.evm.v1.BlockChanges
