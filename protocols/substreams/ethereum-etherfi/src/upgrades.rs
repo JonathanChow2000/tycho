@@ -10,56 +10,66 @@ use anyhow::{anyhow, Result};
 use substreams_ethereum::pb::eth::v2::{Block, TransactionTrace};
 
 use crate::{
-    constants::{EIP1967_IMPLEMENTATION_POSITION, TRACKED_PROXIES},
+    constants::{TrackedProxy, EIP1967_IMPLEMENTATION_POSITION, TRACKED_PROXIES},
     state::InitialState,
 };
 
-/// A tracked proxy delegating to an implementation other than the recorded one.
-#[derive(Debug, PartialEq, Eq)]
-pub struct Upgrade {
-    pub label: &'static str,
-    pub proxy: [u8; 20],
-    pub recorded: [u8; 20],
-    pub installed: [u8; 20],
-}
-
-/// Every upgrade in `block`, each with the transaction that installed it.
+/// The transactions in `block` that put a tracked proxy behind an implementation other than the
+/// recorded one, each listed once.
 ///
 /// All four proxies are EIP-1967: an upgrade is a write to the implementation slot on the proxy
 /// itself. A write that lands on the recorded implementation is not an upgrade.
 pub fn detect_upgrades<'a>(
     block: &'a Block,
     initial_state: &InitialState,
-) -> Result<Vec<(&'a TransactionTrace, Upgrade)>> {
-    let mut upgrades = Vec::new();
+) -> Result<Vec<&'a TransactionTrace>> {
+    let mut upgrading = Vec::new();
     for tx in block.transactions() {
-        for call in tx
-            .calls
-            .iter()
-            .filter(|call| !call.state_reverted)
-        {
-            for change in &call.storage_changes {
-                if change.key != EIP1967_IMPLEMENTATION_POSITION {
-                    continue;
-                }
-                let Some(proxy) = TRACKED_PROXIES
-                    .iter()
-                    .find(|proxy| change.address == proxy.proxy)
-                else {
-                    continue;
-                };
-                let installed = address_in_word(&change.new_value)?;
-                let recorded = initial_state.implementation_of(proxy)?;
-                if installed != recorded {
-                    upgrades.push((
-                        tx,
-                        Upgrade { label: proxy.label, proxy: proxy.proxy, recorded, installed },
-                    ));
-                }
+        if upgrades_a_tracked_proxy(tx, initial_state)? {
+            upgrading.push(tx);
+        }
+    }
+    Ok(upgrading)
+}
+
+/// Whether `tx` leaves a tracked proxy behind an implementation other than the recorded one.
+///
+/// A transaction may write the implementation slot more than once, so what counts is the
+/// address the last write leaves there, the way the rest of the package reports the state a
+/// transaction ends in rather than the states it passes through.
+fn upgrades_a_tracked_proxy(tx: &TransactionTrace, initial_state: &InitialState) -> Result<bool> {
+    let mut installed: Vec<(&TrackedProxy, [u8; 20])> = Vec::new();
+    for call in tx
+        .calls
+        .iter()
+        .filter(|call| !call.state_reverted)
+    {
+        for change in &call.storage_changes {
+            if change.key != EIP1967_IMPLEMENTATION_POSITION {
+                continue;
+            }
+            let Some(proxy) = TRACKED_PROXIES
+                .iter()
+                .find(|proxy| change.address == proxy.proxy)
+            else {
+                continue;
+            };
+            let address = address_in_word(&change.new_value)?;
+            match installed
+                .iter_mut()
+                .find(|(tracked, _)| tracked.label == proxy.label)
+            {
+                Some((_, last)) => *last = address,
+                None => installed.push((proxy, address)),
             }
         }
     }
-    Ok(upgrades)
+    for (proxy, address) in installed {
+        if address != initial_state.implementation_of(proxy)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// The address in a 32-byte storage word.
@@ -136,9 +146,6 @@ pub(crate) mod fixtures {
 #[cfg(test)]
 mod tests {
     use super::{fixtures::*, *};
-    use crate::constants::{
-        EETH_ADDRESS, LIQUIDITY_POOL_ADDRESS, RATE_LIMITER_ADDRESS, REDEMPTION_MANAGER_ADDRESS,
-    };
 
     #[test]
     fn writing_the_recorded_implementation_is_not_an_upgrade() {
@@ -154,42 +161,39 @@ mod tests {
 
         let upgrades = detect_upgrades(&block, &initial_state()).expect("detect");
 
-        let [(tx, upgrade)] = upgrades.as_slice() else {
-            panic!("expected one upgrade, got {upgrades:?}");
+        let [tx] = upgrades.as_slice() else {
+            panic!("expected one upgrading transaction, got {}", upgrades.len());
         };
         assert_eq!(tx.index, 7);
-        assert_eq!(
-            *upgrade,
-            Upgrade {
-                label: "rate_limiter",
-                proxy: RATE_LIMITER_ADDRESS,
-                recorded: RATE_LIMITER_V1,
-                installed: OTHER,
-            }
-        );
     }
 
-    /// The escrow migration at block 25533308 upgraded three proxies in one block; each is
-    /// reported.
+    /// Any one of the four proxies moving is enough.
     #[test]
     fn every_tracked_proxy_is_watched() {
+        for proxy in TRACKED_PROXIES.iter() {
+            let block = block_with(vec![upgrade_write(proxy.proxy, OTHER)], false);
+            let upgrades = detect_upgrades(&block, &initial_state()).expect("detect");
+            assert_eq!(upgrades.len(), 1, "{} was not watched", proxy.label);
+        }
+    }
+
+    /// The escrow migration at block 25533308 wrote the implementation slot of all four
+    /// tracked proxies in one transaction; the transaction is listed once.
+    #[test]
+    fn a_transaction_upgrading_several_proxies_is_listed_once() {
         let block = block_with(
-            vec![
-                upgrade_write(LIQUIDITY_POOL_ADDRESS, OTHER),
-                upgrade_write(EETH_ADDRESS, OTHER),
-                upgrade_write(REDEMPTION_MANAGER_ADDRESS, OTHER),
-                upgrade_write(RATE_LIMITER_ADDRESS, OTHER),
-            ],
+            TRACKED_PROXIES
+                .iter()
+                .map(|proxy| upgrade_write(proxy.proxy, OTHER))
+                .collect(),
             false,
         );
-
-        let upgrades = detect_upgrades(&block, &initial_state()).expect("detect");
-
-        let labels: Vec<_> = upgrades
-            .iter()
-            .map(|(_, upgrade)| upgrade.label)
-            .collect();
-        assert_eq!(labels, ["liquidity_pool", "eeth", "redemption_manager", "rate_limiter"]);
+        assert_eq!(
+            detect_upgrades(&block, &initial_state())
+                .expect("detect")
+                .len(),
+            1
+        );
     }
 
     /// weETH is a proxy too, but none of its own storage is tracked.
@@ -210,6 +214,34 @@ mod tests {
         assert!(detect_upgrades(&block, &initial_state())
             .expect("detect")
             .is_empty());
+    }
+
+    /// A transaction that writes another implementation and then puts the recorded one back
+    /// ends with the layout the slots were verified against, so it is not an upgrade.
+    #[test]
+    fn a_transaction_that_restores_the_recorded_implementation_is_not_an_upgrade() {
+        let block = block_with(
+            vec![rate_limiter_upgrade_to(OTHER), rate_limiter_upgrade_to(RATE_LIMITER_V1)],
+            false,
+        );
+        assert!(detect_upgrades(&block, &initial_state())
+            .expect("detect")
+            .is_empty());
+    }
+
+    /// The other way round is an upgrade: the transaction ends on the other implementation.
+    #[test]
+    fn a_transaction_that_ends_on_another_implementation_is_an_upgrade() {
+        let block = block_with(
+            vec![rate_limiter_upgrade_to(RATE_LIMITER_V1), rate_limiter_upgrade_to(OTHER)],
+            false,
+        );
+        assert_eq!(
+            detect_upgrades(&block, &initial_state())
+                .expect("detect")
+                .len(),
+            1
+        );
     }
 
     #[test]
