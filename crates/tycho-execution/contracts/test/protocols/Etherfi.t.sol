@@ -6,9 +6,8 @@ import "@src/executors/EtherfiExecutor.sol";
 import {Constants} from "../Constants.sol";
 import {Vm} from "forge-std/Vm.sol";
 
-// A block after the escrow migration at 25533308, which replaced the LiquidityPool, eETH and
-// EtherFiRedemptionManager implementations. It is the block the `ethereum-etherfi` substreams
-// package snapshots, so both sides of the integration are exercised against the same state.
+// Match the `ethereum-etherfi` snapshot block so indexing and execution
+// tests use the same contract implementations and state.
 uint256 constant ETHERFI_FORK_BLOCK = 25940000;
 
 // `LiquidityPool` slot 207: `totalValueOutOfLp` in the low 128 bits, `totalValueInLp` in the
@@ -37,11 +36,9 @@ interface IEtherfiRedemptionManagerView {
 
 /// Raises the pool's liquid ether until `amount` is redeemable, and reverts if it is not.
 ///
-/// Redemptions are paid out of `totalValueInLp` and may not take it below
-/// `lowWatermarkInBpsOfTvl` of `getTotalPooledEther()`. The pool has sat under that floor since
-/// well before this fork block, so a redemption against untouched mainnet state reverts with
-/// `ExceededRedeemable` whatever the executor does. The figure written here is a little over the
-/// floor, in the range the pool itself has held.
+/// The fork state has insufficient liquidity above the redemption floor.
+/// Sets `totalValueInLp` and the pool's ETH balance to cover `amount` while
+/// preserving `totalValueOutOfLp`, then checks the redemption manager's limit.
 function openEtherfiRedemptions(
     Vm vm,
     address liquidityPool,

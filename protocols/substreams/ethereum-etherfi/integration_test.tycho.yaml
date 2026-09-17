@@ -18,9 +18,7 @@ tests:
           - "0x35fA164735182de50811E8e2E824cFb9B6118ac2" # eeth
         creation_tx: "0xdc387d47c733ca16693792c12f81b3a038930489b2b89dfcae14b6c4f293fe56"
         skip_simulation: false
-        # The executor's runtime bytecode is not in protocols/testing, so the harness cannot
-        # plant it. propeller-heads/tycho#1455 reworks how those fixtures are produced; EtherFi
-        # joins them once it lands.
+        # Execution checks require an EtherFi executor bytecode fixture, which this harness lacks.
         skip_execution: true
       - id: "0x35fA164735182de50811E8e2E824cFb9B6118ac2"
         tokens:

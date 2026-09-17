@@ -46,11 +46,8 @@ read_storage() {
 
 echo "Reading EtherFi state at block $BLOCK_NUMBER..." >&2
 
-# The components have no creation event, so they are anchored to a transaction in the start
-# block. Which one does not matter and cannot be made to: the storage below is read at the end of
-# the block, map_protocol_changes takes either the creation branch or the update branch and never
-# both, and the block need not contain any EtherFi activity to anchor to - 25940000 contains
-# none. The first transaction is taken so that a rerun at the same block reproduces the snapshot.
+# Anchor component creation to the start block's first transaction for reproducibility.
+# The snapshot contains end-of-block storage; the start block emits only component creation.
 creation_tx=$(cast block "$BLOCK_NUMBER" --json --rpc-url "$RPC_URL" | jq -r '.transactions[0]')
 liquidity_pool_value=$(read_storage "$LIQUIDITY_POOL" "$LIQUIDITY_POOL_VALUE_POSITION")
 eeth_total_shares=$(read_storage "$EETH" "$EETH_TOTAL_SHARES_POSITION")
@@ -60,11 +57,9 @@ eth_redemption_info=$(read_storage "$REDEMPTION_MANAGER" "$ETH_REDEMPTION_INFO_P
 eeth_mint_limit=$(read_storage "$RATE_LIMITER" "$EETH_MINT_LIMIT_POSITION")
 eeth_burn_limit=$(read_storage "$RATE_LIMITER" "$EETH_BURN_LIMIT_POSITION")
 
-# Every tracked slot is verified against the contract's own getter before the snapshot is
-# printed. The slots are only meaningful for the implementations they were read from, and the
-# proxies behind them are upgraded every few months: the escrow migration at block 25533308
-# removed a variable an earlier revision of this package tracked, and its slot became a gap that
-# still decodes to a plausible zero.
+# Validate every tracked slot against its contract getter before printing the snapshot.
+# Slot layouts are specific to the recorded implementations; a valid storage word alone
+# does not establish that the slot still represents the expected field.
 EIP1967_IMPLEMENTATION="0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
 FAILURES=0
 

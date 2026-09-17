@@ -13,8 +13,7 @@ pub fn bytes_from_hex(value: &str) -> Result<Vec<u8>> {
     hex::decode(value).map_err(|e| anyhow!("Failed to decode hex value: {e}"))
 }
 
-/// Successful writes in execution order. A parent call can resume and write after its child,
-/// so traversing the call tree alone does not identify the final value of a slot.
+/// Successful writes sorted by execution ordinal, including parent writes after child calls.
 pub fn ordered_storage_changes(tx: &TransactionTrace) -> Vec<&StorageChange> {
     let mut changes: Vec<_> = tx
         .calls

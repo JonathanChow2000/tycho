@@ -35,9 +35,7 @@ pub fn detect_upgrades<'a>(
 
 /// Whether `tx` leaves a tracked proxy behind an implementation other than the recorded one.
 ///
-/// A transaction may write the implementation slot more than once, so what counts is the
-/// address the last write leaves there, the way the rest of the package reports the state a
-/// transaction ends in rather than the states it passes through.
+/// Uses the final implementation-slot write in execution order for each tracked proxy.
 fn upgrades_a_tracked_proxy(tx: &TransactionTrace, initial_state: &InitialState) -> Result<bool> {
     let mut installed: Vec<(&TrackedProxy, [u8; 20])> = Vec::new();
     for change in ordered_storage_changes(tx) {
