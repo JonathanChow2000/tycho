@@ -1,3 +1,20 @@
+## [0.408.0](https://github.com/propeller-heads/tycho/compare/0.407.2...0.408.0) (2026-09-17)
+
+
+### Features
+
+* **execution:** accept Uniswap V2/V3 fork names in fallback encoder ([859c408](https://github.com/propeller-heads/tycho/commit/859c4089d188f5a8142d3c66fcae3fdc76a6d3f4))
+* **execution:** encode fallback swaps for the TychoFallbackRouter ([311f2ce](https://github.com/propeller-heads/tycho/commit/311f2ce08b5001d712685347e7f1922ba9f36275))
+* **execution:** encode fallback swaps for the TychoFallbackRouter ([#1434](https://github.com/propeller-heads/tycho/issues/1434)) ([54bcb02](https://github.com/propeller-heads/tycho/commit/54bcb025fa581d8465abd986d5d041a0129910d8))
+* **execution:** reject Angstrom hooks in fallback swap encoding ([3812c5d](https://github.com/propeller-heads/tycho/commit/3812c5d39c5424e6e0bca6e1186172aedb258e4e))
+* **execution:** serve all Uniswap V3 forks in fallback callback ([b238b1c](https://github.com/propeller-heads/tycho/commit/b238b1c2f0edb747fc28b5e5addf4de255220920))
+
+
+### Bug Fixes
+
+* **execution:** alias only Uniswap forks deployed on Ethereum ([e995f6b](https://github.com/propeller-heads/tycho/commit/e995f6b52451ae11bf29d524955ff0cc859706fc))
+* **execution:** classify bad fallback user_data as InvalidInput ([dbd3c33](https://github.com/propeller-heads/tycho/commit/dbd3c3367c3c4214ba7f0ea96538ed5a6455a1d7))
+
 ## [0.407.2](https://github.com/propeller-heads/tycho/compare/0.407.1...0.407.2) (2026-09-16)
 
 
