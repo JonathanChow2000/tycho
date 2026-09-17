@@ -3,6 +3,9 @@ pragma solidity ^0.8.13;
 
 import {ISwapAdapter} from "src/interfaces/ISwapAdapter.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {
+    SafeERC20
+} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 
 /// @title TempestAdapter
 /// @notice Adapter for swapping tokens on Tempest, Flowdesk's propAMM.
@@ -12,26 +15,17 @@ import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 /// `StaleUpdate` otherwise; simulation pins the timestamp through the
 /// `override_block_timestamp` attribute the substreams package emits.
 ///
-/// The adapter is quote-only: it never calls a settlement entrypoint. Every
-/// `swap*` function on the router is gated on `allowedTaker[msg.sender]`, and
-/// the adapter runs at a synthetic address that is not on that allowlist, so
-/// executing settlement here would revert `TakerNotAllowed` regardless of the
-/// pool's real state. Nothing is lost by quoting instead: `quote` and
-/// `quoteExactOut` are `view`, ungated, and already enforce every condition
-/// settlement would — pause state, pair registration, lane freshness, ladder
-/// size, and (via `_checkVaultCover`) that the vault holds `amountOut` AND has
-/// granted the router a standing allowance for it. A quote that succeeds is a
-/// swap that would settle.
+/// `swap` settles for real, through the same push-payment `IPropAMM.swap` the
+/// production executor uses: the input is transferred to the venue and the
+/// venue pays the recipient. Settlement used to be gated on
+/// `allowedTaker[msg.sender]`,
+/// which the adapter's synthetic address could never satisfy; the router
+/// upgrade at block 25744018 removed that gate.
 contract TempestAdapter is ISwapAdapter {
+    using SafeERC20 for IERC20;
     /// Bounds the `getLimits` binary search for the largest quotable size.
     /// 8 iterations resolve the limit to within ~0.4% of the vault balance.
     uint256 private constant LIMIT_SEARCH_ITERATIONS = 8;
-
-    /// Measured cost of a `swapWithAllowances` fill: two ERC20 transfers plus
-    /// the registry lane read and ladder walk. Reported instead of this call's
-    /// own `gasleft()` delta, which would understate a real fill because the
-    /// adapter quotes rather than settles.
-    uint256 private constant SETTLEMENT_GAS = 130000;
 
     ITempest public immutable tempest;
 
@@ -56,34 +50,43 @@ contract TempestAdapter is ISwapAdapter {
     }
 
     /// @inheritdoc ISwapAdapter
-    /// @dev See the contract-level note on why this quotes rather than settles.
-    /// `gasUsed` is therefore reported as the venue's measured settlement cost
-    /// rather than the gas this call consumed, which would understate a real
-    /// fill by the two ERC20 transfers settlement performs.
     function swap(
         bytes32 poolId,
         address sellToken,
         address buyToken,
         OrderSide side,
         uint256 specifiedAmount
-    ) external view override returns (Trade memory trade) {
+    ) external override returns (Trade memory trade) {
         if (specifiedAmount == 0) {
             return trade;
         }
         _validatePoolTokens(poolId, sellToken, buyToken);
 
+        // `swap` is exact-input, so a buy order is priced back to its input
+        // first. Quote before settling: the simulation engine does not model
+        // the recipient's output-token balance, so a balance diff would read
+        // zero there.
+        uint256 amountIn = specifiedAmount;
         if (side == OrderSide.Sell) {
             trade.calculatedAmount =
                 tempest.quote(sellToken, buyToken, specifiedAmount);
         } else {
-            trade.calculatedAmount =
+            amountIn =
                 tempest.quoteExactOut(sellToken, buyToken, specifiedAmount);
+            trade.calculatedAmount = amountIn;
         }
         if (trade.calculatedAmount == 0) {
             revert TooSmall(0);
         }
 
-        trade.gasUsed = SETTLEMENT_GAS;
+        // Push payment: the venue consumes the balance it has been sent.
+        IERC20(sellToken)
+            .safeTransferFrom(msg.sender, address(tempest), amountIn);
+        uint256 gasBefore = gasleft();
+        tempest.swap(
+            sellToken, buyToken, amountIn, 0, msg.sender, block.timestamp
+        );
+        trade.gasUsed = gasBefore - gasleft();
 
         // No marginal price is reported; see the note on `price`. It is not
         // left at the Fraction(0, 0) default because simulation runs the
@@ -284,6 +287,15 @@ interface ITempest {
         external
         view
         returns (uint256 amountOut);
+
+    function swap(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 minAmountOut,
+        address recipient,
+        uint256 deadline
+    ) external returns (uint256 amountOut);
 
     function quoteExactOut(address tokenIn, address tokenOut, uint256 amountOut)
         external

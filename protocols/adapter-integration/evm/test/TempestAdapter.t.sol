@@ -25,7 +25,9 @@ contract TempestAdapterTest is AdapterTest {
         // The maker's last committed lane for USDC/WETH. Lane payloads persist
         // in registry storage after the commit, so the ladder is readable here;
         // only the timestamp goes stale, which _refreshLane restamps.
-        vm.createSelectFork(vm.rpcUrl("mainnet"), 25673715);
+        // After the router upgrade at block 25744018 that removed the taker
+        // allowlist, so `swap` settles from the adapter's own address.
+        vm.createSelectFork(vm.rpcUrl("mainnet"), 25963848);
         _refreshLane(USDC, WETH);
 
         adapter = new TempestAdapter(TEMPEST_ROUTER);
@@ -123,7 +125,8 @@ contract TempestAdapterTest is AdapterTest {
     /// `swap` must report no marginal price, but with a non-zero denominator:
     /// simulation divides the fraction and treats a zero denominator as a fatal
     /// error, which would fail the swap.
-    function testSwapReportsUnsetPrice() public view {
+    function testSwapReportsUnsetPrice() public {
+        _fund(WETH, SELL_WETH_AMOUNT);
         Trade memory trade = adapter.swap(
             _poolId(USDC, WETH), WETH, USDC, OrderSide.Sell, SELL_WETH_AMOUNT
         );
@@ -132,7 +135,9 @@ contract TempestAdapterTest is AdapterTest {
         assertEq(trade.price.denominator, 1);
     }
 
-    function testSwapSell() public view {
+    function testSwapSell() public {
+        _fund(WETH, SELL_WETH_AMOUNT);
+        uint256 usdcBefore = IERC20(USDC).balanceOf(address(this));
         Trade memory trade = adapter.swap(
             _poolId(USDC, WETH), WETH, USDC, OrderSide.Sell, SELL_WETH_AMOUNT
         );
@@ -140,9 +145,15 @@ contract TempestAdapterTest is AdapterTest {
         // Selling 0.1 WETH must return a plausible USDC amount (6 decimals).
         assertGt(trade.calculatedAmount, 0);
         assertGt(trade.gasUsed, 0);
+        // The swap really settled: the venue paid this contract.
+        assertEq(
+            IERC20(USDC).balanceOf(address(this)) - usdcBefore,
+            trade.calculatedAmount
+        );
     }
 
-    function testSwapBuy() public view {
+    function testSwapBuy() public {
+        _fund(WETH, SELL_WETH_AMOUNT);
         Trade memory trade = adapter.swap(
             _poolId(USDC, WETH), WETH, USDC, OrderSide.Buy, BUY_USDC_AMOUNT
         );
@@ -152,7 +163,7 @@ contract TempestAdapterTest is AdapterTest {
         assertGt(trade.gasUsed, 0);
     }
 
-    function testSwapZeroAmountIsNoop() public view {
+    function testSwapZeroAmountIsNoop() public {
         Trade memory trade =
             adapter.swap(_poolId(USDC, WETH), WETH, USDC, OrderSide.Sell, 0);
 
@@ -173,12 +184,16 @@ contract TempestAdapterTest is AdapterTest {
 
     /// A pair with no lane ever committed must report zero limits rather than
     /// bubbling up the router's `StaleUpdate` revert.
-    function testGetLimitsUnquotedPairIsZero() public view {
+    /// Every registered pair carries a committed ladder at this block, so a
+    /// second pair must quote as well as the one refreshed in `setUp`.
+    function testGetLimitsSecondPair() public {
+        _refreshLane(USDC, USDT);
+
         uint256[] memory limits =
             adapter.getLimits(_poolId(USDC, USDT), USDC, USDT);
 
-        assertEq(limits[0], 0);
-        assertEq(limits[1], 0);
+        assertGt(limits[0], 0);
+        assertGt(limits[1], 0);
     }
 
     /// A stale lane makes the pair inactive, so limits must be zero and the
@@ -227,6 +242,12 @@ contract TempestAdapterTest is AdapterTest {
                     | (storedLane & ((uint256(1) << 224) - 1))
             )
         );
+    }
+
+    /// Gives this contract `amount` of `token` and lets the adapter pull it.
+    function _fund(address token, uint256 amount) internal {
+        deal(token, address(this), amount);
+        IERC20(token).approve(address(adapter), type(uint256).max);
     }
 
     /// Mirrors the component id the substreams package emits: keccak of the
