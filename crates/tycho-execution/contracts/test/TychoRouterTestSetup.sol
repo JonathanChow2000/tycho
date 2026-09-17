@@ -263,8 +263,8 @@ contract TychoRouterTestSetup is
         propAMMFallbackExecutor = new PropAMMFallbackExecutor();
         // The Sky venues exist only on mainnet, and the executor's constructor
         // reads their token wiring, so it cannot deploy on forks where the
-        // venues have no code. Deployed before Tempest so that skipping it does
-        // not shift any earlier executor's deterministic address.
+        // venues have no code. Deployed last, so skipping it does not shift
+        // the other executors' deterministic addresses.
         bool skyDeployable = SKY_DAI_USDS_CONVERTER.code.length != 0;
         if (skyDeployable) {
             skyExecutor = new SkyExecutor(

@@ -126,8 +126,6 @@ modules:
         mode: get
       - store: store_router_state
         mode: get
-      - store: store_component_index
-        mode: get
       - store: store_vault_token_balances
         mode: deltas
       - store: store_vault_token_balances

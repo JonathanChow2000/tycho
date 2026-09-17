@@ -348,7 +348,9 @@ fn map_vault_balance_snapshots(
         new_tokens
     };
 
-    let Some(last_trace) = block.transaction_traces.last() else {
+    // Successful transactions only: the sums this `set` must supersede all come from
+    // `block.transactions()`, so the last of those carries the block's maximum relevant ordinal.
+    let Some(last_trace) = block.transactions().last() else {
         return Ok(BlockBalanceDeltas { balance_deltas });
     };
     let tx: Transaction = last_trace.into();
@@ -436,7 +438,6 @@ fn map_protocol_changes(
     pair_registered_deltas: StoreDeltas,
     component_index_store: StoreGetString,
     router_state_store: StoreGetString,
-    token_components_store: StoreGetString,
     // Which tokens moved this block; the values come from the `get` view below. All Tempest pairs
     // draw on one shared vault, so a token's balance is vault-wide and is fanned out here to every
     // component that trades it.
@@ -602,17 +603,23 @@ fn map_protocol_changes(
     // rather than accumulated a second time per component. The vault itself is in no component's
     // contract set, so an account-scoped balance keyed by it would be filtered out of the pool;
     // simulation reaches the inventory through `balance_owner`.
+    // `transactions()` filters to successful transactions; `transaction_traces` would let a
+    // reverted one carry the block's balance changes.
     let last_tx: Option<Transaction> = block
-        .transaction_traces
+        .transactions()
         .last()
         .map(Into::into);
     let emit = |builder: &mut TransactionChangesBuilder, id: &str, token: &[u8]| {
         let balance = vault_balance_store
             .get_last(hex::encode(token))
             .unwrap_or_else(BigInt::zero);
+        // Balances are unsigned in the tycho API. The store is a running sum between rebases, so
+        // a token whose reserve drifts without emitting `Transfer` (rebasing, mint/burn) can take
+        // it briefly negative; emitting that raw would read back as an enormous reserve.
+        let balance = if balance < BigInt::zero() { BigInt::zero() } else { balance };
         builder.add_balance_change(&BalanceChange {
             token: token.to_vec(),
-            balance: balance.to_signed_bytes_be(),
+            balance: balance.to_bytes_be().1,
             component_id: id.as_bytes().to_vec(),
         });
     };
@@ -642,7 +649,7 @@ fn map_protocol_changes(
             let Ok(token) = hex::decode(&token_hex) else {
                 continue;
             };
-            let Some(component_ids) = token_components_store.get_last(token_key(&token)) else {
+            let Some(component_ids) = component_index_store.get_last(token_key(&token)) else {
                 continue;
             };
             let builder = transaction_changes
