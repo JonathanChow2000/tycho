@@ -34,7 +34,9 @@ tests:
         static_attributes:
           self_contained_tokens: "0x5b22307863303261616133396232323366653864306130653563346632376561643930383363373536636332222c22307864616331376639353864326565353233613232303632303639393435393763313364383331656337225d" # ["0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2","0xdac17f958d2ee523a2206206994597c13d831ec7"]
         creation_tx: "0x84ee526d01f198575c653afc6ae14993af4de4dfb72780a21597371805e8c676"
-        # No lane has ever been written for this pair, so `getState` reverts `StaleUpdate`.
+        # No lane has been written for this pair by `stop_block`, so `getState` reverts
+        # `StaleUpdate`. The maker does quote it later — all three pairs carry a ladder by
+        # block 25963848 — but not within this range.
         skip_simulation: true
         skip_execution: true
       - id: "0x6b7d03b47715d0315ccb75d25300c242e26b51f5202e1a32df20f239e1d9de35"
@@ -54,7 +56,9 @@ tests:
         static_attributes:
           self_contained_tokens: "0x5b22307861306238363939316336323138623336633164313964346132653965623063653336303665623438222c22307864616331376639353864326565353233613232303632303639393435393763313364383331656337225d" # ["0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48","0xdac17f958d2ee523a2206206994597c13d831ec7"]
         creation_tx: "0xaac181daaf77566de42b6a01a9c4c53eec1a9bd2522f0cd0181c19e31514e573"
-        # No lane has ever been written for this pair, so `getState` reverts `StaleUpdate`.
+        # No lane has been written for this pair by `stop_block`, so `getState` reverts
+        # `StaleUpdate`. The maker does quote it later — all three pairs carry a ladder by
+        # block 25963848 — but not within this range.
         skip_simulation: true
         skip_execution: true
 
@@ -75,14 +79,17 @@ tests:
           self_contained_tokens: "0x5b22307861306238363939316336323138623336633164313964346132653965623063653336303665623438222c22307863303261616133396232323366653864306130653563346632376561643930383363373536636332225d" # ["0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48","0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"]
         creation_tx: "0x5ffcf6add469b9490dceff2e03c3a86827232c2b0f6ed4478e684442068262a9"
         skip_simulation: false
-        # Execution is skipped, not broken. The harness replays encoded calldata against real
-        # forked state, where TychoRouter is not on the venue's `allowedTaker` list, so every fill
-        # reverts `TakerNotAllowed` (0xf774ea08) — confirmed by running it. That is an on-chain
-        # grant Flowdesk has to make (`addTaker(<tychoRouter>)`), not something this package can
-        # fix. The execution path itself is covered by
-        # `tycho-execution/contracts/test/protocols/Tempest.t.sol::testSingleSwap`, which patches
-        # the allowlist and runs Rust-encoded calldata through TychoRouter into the live venue.
-        # Flip this to false once the router is allowlisted on mainnet.
+        # Execution is skipped because of this test's block range, not because the venue
+        # rejects it. The harness replays encoded calldata against forked state at `stop_block`,
+        # where the live implementation is 0xc85509ed — one that still gates settlement on
+        # `allowedTaker[msg.sender]`, so every fill reverts `TakerNotAllowed` (0xf774ea08).
+        # The upgrade at block 25744018 (implementation 0x40b05afd) removed that gate; a
+        # non-allowlisted caller settles against it, which is what
+        # `tycho-execution/contracts/test/protocols/Tempest.t.sol::testSingleSwap` now exercises
+        # at block 25963848 with no taker fixture at all.
+        #
+        # Enabling it here means moving `stop_block` past 25744018 to the next committed
+        # USDC/WETH lane, which grows the indexed range from ~36k blocks to ~330k.
         skip_execution: true
       # USDC/WETH above is the only pair the maker has ever quoted. The other two are registered
       # and indexed, so they must be listed here to be skipped — `run_simulation` walks every
