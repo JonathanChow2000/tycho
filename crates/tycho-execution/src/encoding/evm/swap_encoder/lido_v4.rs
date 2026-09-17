@@ -35,19 +35,19 @@ impl SwapEncoder for LidoV4SwapEncoder {
         let config = config
             .ok_or_else(|| EncodingError::FatalError("Lido V4 config is empty".to_string()))?;
 
-        let steth_address = config
-            .get("steth_address")
-            .map(|a| Bytes::from(a.as_str()))
-            .ok_or_else(|| {
-                EncodingError::FatalError("Missing steth_address in lido_v4 config".to_string())
+        let address = |name: &str| -> Result<Bytes, EncodingError> {
+            let value = config.get(name).ok_or_else(|| {
+                EncodingError::FatalError(format!("Missing {name} in lido_v4 config"))
             })?;
-
-        let wsteth_address = config
-            .get("wsteth_address")
-            .map(|a| Bytes::from(a.as_str()))
-            .ok_or_else(|| {
-                EncodingError::FatalError("Missing wsteth_address in lido_v4 config".to_string())
-            })?;
+            let address = value
+                .parse::<alloy::primitives::Address>()
+                .map_err(|error| {
+                    EncodingError::FatalError(format!("Invalid {name} in lido_v4 config: {error}"))
+                })?;
+            Ok(Bytes::from(address.as_slice()))
+        };
+        let steth_address = address("steth_address")?;
+        let wsteth_address = address("wsteth_address")?;
 
         Ok(Self {
             executor_address,
@@ -134,6 +134,24 @@ mod tests {
     }
 
     #[test]
+    fn test_lido_config_rejects_malformed_addresses() {
+        for field in ["steth_address", "wsteth_address"] {
+            for invalid in ["0xzz", "0x01", "0x", "0x11111111111111111111111111111111111111111111"]
+            {
+                let mut config = lido_v4_config();
+                config.insert(field.to_string(), invalid.to_string());
+                assert!(
+                    LidoV4SwapEncoder::new(Bytes::zero(20), Chain::Ethereum, Some(config)).is_err()
+                );
+            }
+            let mut config = lido_v4_config();
+            config.remove(field);
+            assert!(LidoV4SwapEncoder::new(Bytes::zero(20), Chain::Ethereum, Some(config)).is_err());
+        }
+        assert!(LidoV4SwapEncoder::new(Bytes::zero(20), Chain::Ethereum, None).is_err());
+    }
+
+    #[test]
     fn test_encode_lido_v4_submit() {
         let component = ProtocolComponent {
             id: STETH_ADDRESS.to_string(),
@@ -161,7 +179,7 @@ mod tests {
     #[test]
     fn test_encode_lido_v4_wrap() {
         let component = ProtocolComponent {
-            id: WSTETH_ADDRESS.to_string(),
+            id: STETH_ADDRESS.to_string(),
             protocol_system: "lido_v4".to_string(),
             ..Default::default()
         };
@@ -186,7 +204,7 @@ mod tests {
     #[test]
     fn test_encode_lido_v4_unwrap() {
         let component = ProtocolComponent {
-            id: WSTETH_ADDRESS.to_string(),
+            id: STETH_ADDRESS.to_string(),
             protocol_system: "lido_v4".to_string(),
             ..Default::default()
         };
@@ -211,7 +229,7 @@ mod tests {
     #[test]
     fn test_encode_lido_v4_submit_and_wrap() {
         let component = ProtocolComponent {
-            id: WSTETH_ADDRESS.to_string(),
+            id: STETH_ADDRESS.to_string(),
             protocol_system: "lido_v4".to_string(),
             ..Default::default()
         };

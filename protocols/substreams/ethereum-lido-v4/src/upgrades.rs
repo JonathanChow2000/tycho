@@ -21,9 +21,8 @@ use crate::{
 /// recorded one, each listed once.
 ///
 /// stETH is an Aragon `AppProxyUpgradeable`: the Kernel maps `(APP_BASES_NAMESPACE, appId)` to
-/// the implementation and emits `SetApp` when the mapping changes. An install that lands on the
-/// recorded implementation is not an upgrade, which is what the snapshot block itself carries
-/// when it is the migration block.
+/// the implementation and emits `SetApp` when the mapping changes. Only a final implementation
+/// different from the recorded one triggers a pause.
 pub fn detect_upgrades<'a>(
     block: &'a Block,
     initial_state: &InitialState,
@@ -39,9 +38,7 @@ pub fn detect_upgrades<'a>(
 
 /// Whether `tx` leaves a tracked proxy behind an implementation other than the recorded one.
 ///
-/// A transaction may set the same app more than once, so what counts is the implementation the
-/// last `SetApp` leaves in place, the way the rest of the package reports the state a
-/// transaction ends in rather than the states it passes through.
+/// Uses the final `SetApp` for each tracked app within the transaction.
 fn upgrades_a_tracked_proxy(tx: &TransactionTrace, initial_state: &InitialState) -> Result<bool> {
     let Some(receipt) = tx.receipt.as_ref() else {
         return Ok(false);

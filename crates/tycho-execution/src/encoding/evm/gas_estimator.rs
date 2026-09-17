@@ -98,10 +98,8 @@ pub const PROTOCOLS_OUTPUT_TO_ROUTER: &[&str] =
 const LIDO_STETH_ADDRESS: [u8; 20] =
     alloy::primitives::hex!("ae7ab96520DE3A18E5e111B5EaAb095312D7fE84");
 
-/// Lido needs the approval on one leg only, so it cannot go in `PROTOCOLS_NEEDING_APPROVAL`.
-/// `getTransferData` sets `receiver` to the venue (`ProtocolWillDebit` into wstETH) for the wrap
-/// and to the router itself for every other direction, and stETH is the only input token of the
-/// wrap leg. The submit legs pay nothing here because they transfer native ETH.
+/// Only the stETH -> wstETH leg approves the wrapper to debit stETH.
+/// Submit legs send native ETH; unwrap burns wstETH held by the router.
 fn lido_leg_needs_approval(
     protocol_system: &str,
     token_in: &tycho_common::models::token::Token,

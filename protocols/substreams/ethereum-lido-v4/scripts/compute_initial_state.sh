@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Prints the `params` snapshot for substreams.yaml: the five stETH storage slots the package
-# tracks, read at one block. Lido v4 (block 25603297 onwards) moved the pooled-ether accounting
-# to new slots, so the snapshot has to be taken at or after that block.
+# tracks, read at one block. The supported Lido v4 layout requires block 25603297 or later.
 #
 # Usage:
 #   RPC_URL=<archive-rpc> ./scripts/compute_initial_state.sh [block_number]
@@ -18,7 +17,7 @@ if [ -z "${RPC_URL:-}" ]; then
   exit 1
 fi
 
-for bin in cast jq; do
+for bin in cast jq bc; do
   if ! command -v "$bin" >/dev/null 2>&1; then
     echo "Error: '$bin' is required but was not found in PATH." >&2
     exit 1
@@ -41,7 +40,7 @@ read_storage() {
   cast storage "$contract" "$slot" --block "$BLOCK_NUMBER" --rpc-url "$RPC_URL"
 }
 
-echo "Reading stETH raw storage at block $BLOCK_NUMBER from $RPC_URL..." >&2
+echo "Reading stETH raw storage at block $BLOCK_NUMBER..." >&2
 
 total_and_external_shares=$(read_storage "$STETH_PROXY" "$TOTAL_AND_EXTERNAL_SHARES_SLOT")
 buffered_ether_and_deposited_post_report=$(read_storage "$STETH_PROXY" "$BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_SLOT")
@@ -49,11 +48,8 @@ cl_validators_balance_and_cl_pending_balance=$(read_storage "$STETH_PROXY" "$CL_
 staking_state=$(read_storage "$STETH_PROXY" "$STAKING_STATE_SLOT")
 wsteth_shares=$(read_storage "$STETH_PROXY" "$WSTETH_SHARES_SLOT")
 
-# The component has no creation event, so it is anchored to a transaction in the start block.
-# The last one that touches stETH is the anchor: the storage above is read at the end of the
-# block, and map_protocol_changes takes either the creation branch or the update branch, never
-# both, so nothing replays intra-block writes. At the v4 migration block that transaction is the
-# DAO vote that ran finalizeUpgrade_v4.
+# Anchor creation to the last transaction emitting a stETH log in the start block.
+# The snapshot contains end-of-block storage; the start block emits only component creation.
 block_hex=$(printf '0x%x' "$BLOCK_NUMBER")
 creation_tx=$(
   cast rpc eth_getLogs \
@@ -65,10 +61,8 @@ if [ -z "$creation_tx" ]; then
   exit 1
 fi
 
-# Every tracked slot is verified against stETH's own getter before the snapshot is printed. The
-# slots are only meaningful for the implementation they were read from, and Lido has repacked
-# this storage twice: at block 24083113 and again for core v4 at 25603297, each time zeroing the
-# slots the previous layout used.
+# Validate every tracked slot against stETH's getters before printing the snapshot.
+# The slot layout must match the recorded implementation.
 # The implementation the slot positions in src/constants.rs were verified against. The package
 # pauses its component when the proxy moves off the implementation the manifest records, so
 # after an upgrade: re-verify every slot, update this constant, and take a fresh snapshot.

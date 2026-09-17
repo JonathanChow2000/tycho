@@ -27,7 +27,7 @@ use crate::{
     },
     state::{unpack_fields, BalanceState, InitialState},
     upgrades::detect_upgrades,
-    utils::bytes_from_hex,
+    utils::{bytes_from_hex, ordered_storage_changes},
 };
 
 /// Creates the component on `start_block`, and nothing on any other block.
@@ -62,9 +62,8 @@ pub fn map_protocol_components(
     })
 }
 
-/// One component for the whole venue. The four directions it serves - ETH -> stETH,
-/// stETH <-> wstETH and ETH -> wstETH - all run off the same share rate, and keeping them
-/// together means ETH -> stETH is not also offered by a second component that cannot perform it.
+/// One component serves ETH -> stETH, stETH <-> wstETH and ETH -> wstETH
+/// using the pool's shared rate and staking capacity.
 fn create_component() -> ProtocolComponent {
     ProtocolComponent::new(STETH_COMPONENT_ID)
         .with_tokens(&[ETH_ADDRESS, STETH_ADDRESS, WSTETH_ADDRESS])
@@ -106,25 +105,13 @@ pub fn store_balance_slots(params: String, block: eth::v2::Block, store: StoreSe
 fn balance_store_writes(block: &eth::v2::Block) -> Vec<(u64, &'static str, BigInt)> {
     let mut writes = Vec::new();
     for tx in block.transactions() {
-        for call in tx
-            .calls
-            .iter()
-            .filter(|call| !call.state_reverted)
-        {
-            for storage_change in call
-                .storage_changes
-                .iter()
-                .filter(|change| change.address == STETH_ADDRESS)
-            {
-                if let Some(key) =
-                    tracked_slot(&storage_change.key).and_then(|slot| slot.balance_key)
-                {
-                    writes.push((
-                        storage_change.ordinal,
-                        key,
-                        BigInt::from_unsigned_bytes_be(&storage_change.new_value),
-                    ));
-                }
+        for storage_change in ordered_storage_changes(tx) {
+            if let Some(key) = tracked_slot(&storage_change.key).and_then(|slot| slot.balance_key) {
+                writes.push((
+                    storage_change.ordinal,
+                    key,
+                    BigInt::from_unsigned_bytes_be(&storage_change.new_value),
+                ));
             }
         }
     }
@@ -223,38 +210,24 @@ fn handle_state_updates(
     for tx in block.transactions() {
         let mut balance_slot_touched = false;
 
-        for call in tx
-            .calls
-            .iter()
-            .filter(|call| !call.state_reverted)
-        {
-            for storage_change in call
-                .storage_changes
-                .iter()
-                .filter(|change| change.address == STETH_ADDRESS)
-            {
-                let Some(tracked) = tracked_slot(&storage_change.key) else {
-                    continue;
-                };
+        for storage_change in ordered_storage_changes(tx) {
+            let Some(tracked) = tracked_slot(&storage_change.key) else {
+                continue;
+            };
 
-                let builder = transaction_changes
-                    .entry(tx.index as u64)
-                    .or_insert_with(|| TransactionChangesBuilder::new(&(tx.into())));
+            let builder = transaction_changes
+                .entry(tx.index as u64)
+                .or_insert_with(|| TransactionChangesBuilder::new(&(tx.into())));
 
-                builder.add_entity_change(&EntityChanges {
-                    component_id: STETH_COMPONENT_ID.to_string(),
-                    attributes: unpack_fields(
-                        tracked,
-                        &storage_change.new_value,
-                        ChangeType::Update,
-                    ),
-                });
+            builder.add_entity_change(&EntityChanges {
+                component_id: STETH_COMPONENT_ID.to_string(),
+                attributes: unpack_fields(tracked, &storage_change.new_value, ChangeType::Update),
+            });
 
-                if let Some(key) = tracked.balance_key {
-                    let value = BigInt::from_unsigned_bytes_be(&storage_change.new_value);
-                    balances.apply(key, value);
-                    balance_slot_touched = true;
-                }
+            if let Some(key) = tracked.balance_key {
+                let value = BigInt::from_unsigned_bytes_be(&storage_change.new_value);
+                balances.apply(key, value);
+                balance_slot_touched = true;
             }
         }
 
@@ -406,6 +379,86 @@ mod tests {
             &mut transaction_changes,
         );
         transaction_changes
+    }
+
+    fn nested_writes(position: [u8; 32]) -> eth::v2::Block {
+        let mut block = block_with_storage_change(STETH_ADDRESS, position, false);
+        let write = |ordinal, value| eth::v2::StorageChange {
+            address: STETH_ADDRESS.to_vec(),
+            key: position.to_vec(),
+            new_value: vec![value],
+            ordinal,
+            ..Default::default()
+        };
+        block.transaction_traces[0].calls = vec![
+            eth::v2::Call {
+                storage_changes: vec![write(10, 10), write(30, 30)],
+                ..Default::default()
+            },
+            eth::v2::Call { storage_changes: vec![write(20, 20)], ..Default::default() },
+        ];
+        block
+    }
+
+    #[test]
+    fn nested_calls_report_the_final_attribute_write() {
+        let block = nested_writes(STAKING_STATE_POSITION);
+        let changes = updates_for(&block)
+            .remove(&3)
+            .unwrap()
+            .build()
+            .unwrap();
+        let attribute = changes.entity_changes[0]
+            .attributes
+            .iter()
+            .find(|attribute| attribute.name == "prev_stake_block_number")
+            .unwrap();
+        assert_eq!(attribute.value, vec![30]);
+    }
+
+    #[test]
+    fn nested_calls_write_balance_store_in_execution_order() {
+        let writes = balance_store_writes(&nested_writes(TOTAL_AND_EXTERNAL_SHARES_POSITION));
+        let ordinals: Vec<_> = writes
+            .iter()
+            .map(|(ordinal, _, _)| *ordinal)
+            .collect();
+        assert_eq!(ordinals, vec![10, 20, 30]);
+        assert_eq!(writes.last().unwrap().2, BigInt::from(30));
+    }
+
+    #[test]
+    fn nested_calls_report_the_final_balance_write() {
+        use substreams::pb::substreams::StoreDelta;
+        let block =
+            nested_writes(crate::constants::BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_POSITION);
+        let deltas = StoreDeltas {
+            deltas: vec![
+                StoreDelta {
+                    key: TOTAL_AND_EXTERNAL_SHARES_KEY.to_string(),
+                    old_value: b"100".to_vec(),
+                    ..Default::default()
+                },
+                StoreDelta {
+                    key: BUFFERED_ETHER_AND_DEPOSITED_POST_REPORT_KEY.to_string(),
+                    old_value: b"0".to_vec(),
+                    ..Default::default()
+                },
+                StoreDelta {
+                    key: CL_VALIDATORS_BALANCE_AND_CL_PENDING_BALANCE_KEY.to_string(),
+                    old_value: b"0".to_vec(),
+                    ..Default::default()
+                },
+            ],
+        };
+        let mut updates = HashMap::new();
+        handle_state_updates(&block, &deltas, &StoreGetBigInt::new(0), &mut updates);
+        let changes = updates
+            .remove(&3)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(changes.balance_changes[0].balance, BigInt::from(30).to_signed_bytes_be());
     }
 
     /// A live write to a tracked slot is reported against the component as an update.

@@ -2,39 +2,31 @@
 
 ## v0.1.0
 
-Initial Lido integration, on the storage layout Lido core v4.0.0 introduced at block 25603297.
+Lido integration for the core v4.0.0 storage layout, supported from block 25603297.
 
-The manifest records the stETH implementation the tracked slots were verified against. stETH is
-an Aragon proxy whose implementation lives in the Kernel, so the package watches the Kernel's
-`SetApp` for stETH's app id and pauses the component on the block that installs any other
-implementation. It stays paused until the slots are re-verified and a new snapshot is taken.
+One component (`0xae7a...fE84`, stETH) serves four directions using a shared pool state:
 
-One component (`0xae7a...fE84`, the stETH contract) covers the whole venue and serves four
-directions:
+- `ETH -> stETH` through `Lido.submit`.
+- `ETH -> wstETH` through wstETH's payable `receive()`.
+- `stETH -> wstETH` through `wstETH.wrap`.
+- `wstETH -> stETH` through `wstETH.unwrap`.
 
-- `ETH -> stETH` — staking through `Lido.submit`.
-- `stETH <-> wstETH` — wrap and unwrap.
-- `ETH -> wstETH` — wstETH's `receive()` stakes and wraps in one call, which saves the hop
-  through stETH.
+Unstaking requires the asynchronous withdrawal queue, so both token-to-ETH directions report
+zero limits. Deposits respect staking capacity and available uint128 storage capacity. Wraps
+are bounded by stETH supply and unwraps by the wrapper's shares. Unwrap quotes use the value of
+the shares actually transferred; amounts rounding to zero output are rejected.
 
-Unstaking runs through the asynchronous withdrawal queue, so `stETH -> ETH` and `wstETH -> ETH`
-report a zero limit. Keeping the venue in one component is what lets `ETH -> stETH` exist exactly
-once: split across two components, the one that cannot perform it would advertise it anyway.
+The manifest contains an end-of-block snapshot and an anchor transaction for component
+creation. `scripts/compute_initial_state.sh` regenerates the snapshot and verifies its fields
+against the contract getters using an archive RPC. Successful storage writes are processed in
+execution ordinal order, preserving the final state of nested calls.
 
-The contracts predate the package, so the module graph does not discover them from a creation
-event. The manifest carries a state snapshot in `params` and the component is created at
-`start_block`; regenerate the snapshot for a different start block with
-`scripts/compute_initial_state.sh`. The snapshot has to be taken at or after block 25603297:
-Lido v4 (Staking Router v3, LIP-35) moved the pooled-ether accounting from validator counts to
-balances and zeroed the slots the previous layout used.
+The component reports `getTotalPooledEther()` as its ETH balance: buffered ether, consensus-layer
+validator and pending balances, deposits since the last report, and the ether backing external
+shares. The balance store carries these inputs across blocks. Integration tests use
+`skip_balance_check` because this accounting balance includes ETH outside the stETH contract.
 
-The component reports one absolute balance, `getTotalPooledEther()` in ETH: `bufferedEther +
-clValidatorsBalance + clPendingBalance + depositedPostReport`, plus the ether backing the
-external (stVaults) shares at the same share rate. The stETH the wrapper holds is already inside
-that figure, so reporting it as well would count the same ether twice.
-
-Carrying those inputs across blocks needs a `store_balance_slots` store module: a block that
-touches one of the tracked slots usually leaves the others untouched.
-
-The integration test keeps `skip_balance_check`: the stETH component's balance is protocol
-accounting, not the stETH contract's own ETH balance (which only holds the buffered ether).
+The manifest records the verified stETH implementation. The package watches the Aragon Kernel's
+`SetApp` events and pauses the component when a transaction ends on another implementation.
+State updates continue while paused. Resuming requires verification of the storage layout and
+swap behavior against the new implementation. Ordinary protocol-wide pauses are not indexed.

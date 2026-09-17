@@ -26,6 +26,17 @@ interface IWstETHRate {
         returns (uint256);
 }
 
+interface IStETHShareRate {
+    function getSharesByPooledEth(uint256 amount)
+        external
+        view
+        returns (uint256);
+    function getPooledEthByShares(uint256 shares)
+        external
+        view
+        returns (uint256);
+}
+
 contract LidoV4ExecutorExposed is LidoV4Executor {
     constructor(address stEthAddress, address wstEthAddress)
         LidoV4Executor(stEthAddress, wstEthAddress)
@@ -338,6 +349,59 @@ contract LidoV4ExecutorTest is TestUtils, Constants {
             overTheLimit,
             abi.encodePacked(uint8(LidoV4Direction.EthToStEth)),
             BOB
+        );
+    }
+
+    function testUnwrapReceiptMatchesTransferredShares() public {
+        IStETHShareRate rate = IStETHShareRate(STETH_ADDR);
+        uint256[3] memory amounts = [uint256(1), uint256(3), uint256(1 ether)];
+        for (uint256 i; i < amounts.length; i++) {
+            LidoV4Executor executor =
+                new LidoV4Executor(STETH_ADDR, WSTETH_ADDR);
+            uint256 nominal = rate.getPooledEthByShares(amounts[i]);
+            uint256 paidShares = rate.getSharesByPooledEth(nominal);
+            uint256 receipt = rate.getPooledEthByShares(paidShares);
+            deal(WSTETH_ADDR, address(executor), amounts[i]);
+            executor.swap(
+                amounts[i],
+                abi.encodePacked(uint8(LidoV4Direction.WstEthToStEth)),
+                BOB
+            );
+            assertEq(IERC20(STETH_ADDR).balanceOf(address(executor)), receipt);
+            if (amounts[i] == 1) {
+                assertGt(nominal, 0);
+                assertEq(receipt, 0);
+            }
+        }
+    }
+
+    function testSubmitRejectsTotalSharesOverflow() public {
+        uint256 shares = uint256(type(uint128).max) - 10;
+        // Set a 1:1 share rate and unlimited staking capacity.
+        vm.store(
+            STETH_ADDR,
+            0x6038150aecaa250d524370a0fdcdec13f2690e0723eaf277f41d7cae26b359e6,
+            bytes32(shares)
+        );
+        vm.store(
+            STETH_ADDR,
+            0x81a11fa1111afa59b50051f60ccf604a39d96acb484dc467ad8eadb4a63f0a5f,
+            bytes32(shares)
+        );
+        vm.store(
+            STETH_ADDR,
+            0x096e465397f38e659238ccd5d5a2c434ced54a63fd8d694045bfb058ab9d8112,
+            bytes32(0)
+        );
+        vm.store(
+            STETH_ADDR,
+            0xa3678de4a579be090bed1177e0a24f77cc29d181ac22fd7688aca344d8938015,
+            bytes32(block.number)
+        );
+        vm.deal(address(this), 11);
+        vm.expectRevert(bytes("SHARES_OVERFLOW"));
+        lidoV4Executor.swap{value: 11}(
+            11, abi.encodePacked(uint8(LidoV4Direction.EthToStEth)), BOB
         );
     }
 

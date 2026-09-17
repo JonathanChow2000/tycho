@@ -2256,7 +2256,7 @@ fn test_single_encoding_strategy_lido_v4_submit_and_wrap() {
     // ETH -> (lido_v4) -> wstETH, through wstETH's receive() shortcut
     let wsteth = Bytes::from("0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0");
     let component = ProtocolComponent {
-        id: String::from("0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0"),
+        id: String::from("0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84"),
         protocol_system: String::from("lido_v4"),
         ..Default::default()
     };
@@ -2305,7 +2305,7 @@ fn test_single_encoding_strategy_lido_v4_wrap() {
     let steth = Bytes::from("0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84");
     let wsteth = Bytes::from("0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0");
     let component = ProtocolComponent {
-        id: String::from("0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0"),
+        id: String::from("0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84"),
         protocol_system: String::from("lido_v4"),
         ..Default::default()
     };
@@ -2355,7 +2355,7 @@ fn test_single_encoding_strategy_lido_v4_unwrap() {
     let steth = Bytes::from("0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84");
     let wsteth = Bytes::from("0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0");
     let component = ProtocolComponent {
-        id: String::from("0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0"),
+        id: String::from("0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84"),
         protocol_system: String::from("lido_v4"),
         ..Default::default()
     };
@@ -2410,7 +2410,7 @@ fn test_sequential_encoding_strategy_lido_v4_submit_then_wrap() {
         ..Default::default()
     };
     let wrap_pool = ProtocolComponent {
-        id: String::from("0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0"),
+        id: String::from("0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84"),
         protocol_system: String::from("lido_v4"),
         ..Default::default()
     };

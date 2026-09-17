@@ -41,6 +41,24 @@ impl InitialState {
         for proxy in TRACKED_PROXIES.iter() {
             state.implementation_of(proxy)?;
         }
+        for (name, word) in [
+            ("total_and_external_shares", &state.total_and_external_shares),
+            (
+                "buffered_ether_and_deposited_post_report",
+                &state.buffered_ether_and_deposited_post_report,
+            ),
+            (
+                "cl_validators_balance_and_cl_pending_balance",
+                &state.cl_validators_balance_and_cl_pending_balance,
+            ),
+            ("staking_state", &state.staking_state),
+            ("wsteth_shares", &state.wsteth_shares),
+        ] {
+            let bytes = bytes_from_hex(word).map_err(|error| anyhow!("{name}: {error}"))?;
+            if bytes.is_empty() || bytes.len() > 32 {
+                return Err(anyhow!("{name} must contain 1 to 32 bytes, got {}", bytes.len()));
+            }
+        }
         Ok(state)
     }
 
@@ -255,6 +273,37 @@ mod tests {
 
         let err = InitialState::parse(&json).unwrap_err();
         assert!(err.to_string().contains("steth"), "{err}");
+    }
+
+    #[test]
+    fn malformed_snapshot_words_are_rejected() {
+        let manifest = include_str!("../substreams.yaml");
+        let json = manifest
+            .split("store_balance_slots: &initial_state |\n")
+            .nth(1)
+            .unwrap()
+            .split("  map_protocol_components:")
+            .next()
+            .unwrap();
+        let original: serde_json::Value = serde_json::from_str(json).unwrap();
+        for name in [
+            "total_and_external_shares",
+            "buffered_ether_and_deposited_post_report",
+            "cl_validators_balance_and_cl_pending_balance",
+            "staking_state",
+            "wsteth_shares",
+        ] {
+            for invalid in [
+                "0x".to_string(),
+                format!("0x01{}", &original[name].as_str().unwrap()[2..]),
+                "0xzz".to_string(),
+            ] {
+                let mut params = original.clone();
+                params[name] = serde_json::Value::String(invalid);
+                let error = InitialState::parse(&params.to_string()).expect_err(name);
+                assert!(error.to_string().contains(name), "{error}");
+            }
+        }
     }
 
     fn big(value: &str) -> BigInt {
