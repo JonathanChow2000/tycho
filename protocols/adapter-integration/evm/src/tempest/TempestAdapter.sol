@@ -17,10 +17,15 @@ import {
 ///
 /// `swap` settles for real, through the same push-payment `IPropAMM.swap` the
 /// production executor uses: the input is transferred to the venue and the
-/// venue pays the recipient. Settlement used to be gated on
-/// `allowedTaker[msg.sender]`,
-/// which the adapter's synthetic address could never satisfy; the router
-/// upgrade at block 25744018 removed that gate.
+/// venue pays the recipient.
+///
+/// Settlement is open to any caller only because the venue's OPERATOR-settable
+/// `openTakerAccess` flag is on. The taker gate is intact: `_checkTaker`
+/// reverts `TakerIsBlocked` for a blocked address, and `TakerNotAllowed` when
+/// the flag is off and the caller is not in `allowedTaker`. Neither `isActive`
+/// nor `quote` consults taker access, so if the flag is turned off, or the
+/// TychoRouter is blocked, this adapter keeps quoting while every fill reverts.
+/// An `allowedTaker` entry is what makes the integration survive a flag flip.
 contract TempestAdapter is ISwapAdapter {
     using SafeERC20 for IERC20;
     /// Bounds the `getLimits` binary search for the largest quotable size.
@@ -63,9 +68,12 @@ contract TempestAdapter is ISwapAdapter {
         _validatePoolTokens(poolId, sellToken, buyToken);
 
         // `swap` is exact-input, so a buy order is priced back to its input
-        // first. Quote before settling: the simulation engine does not model
-        // the recipient's output-token balance, so a balance diff would read
-        // zero there.
+        // first. This is deliberate and must stay: `PropAMMExecutor` only ever
+        // calls `IPropAMM.swap`, and tycho has no exact-out settlement path, so
+        // reaching for an exact-out entrypoint here would model a fill the
+        // executor can never emit. Quote before settling: the simulation engine
+        // does not model the recipient's output-token balance, so a balance
+        // diff would read zero there.
         uint256 amountIn = specifiedAmount;
         if (side == OrderSide.Sell) {
             trade.calculatedAmount =
@@ -134,6 +142,12 @@ contract TempestAdapter is ISwapAdapter {
             hi = vaultBalance;
         }
 
+        // The search treats every `quoteExactOut` revert as "size too large".
+        // That holds because the venue reverts `InsufficientLiquidity` above
+        // the committed ladder and above what the vault can pay, and returns a
+        // price
+        // for any size below it -- it has no minimum-size revert. A venue that
+        // gained one would collapse this search toward zero.
         uint256 lo = 0;
         for (uint256 i = 0; i < LIMIT_SEARCH_ITERATIONS; i++) {
             uint256 mid = lo + (hi - lo) / 2;
@@ -276,6 +290,8 @@ interface ITempest {
 
     function getPairs() external view returns (TokenPair[] memory pairs);
 
+    /// Unused by the adapter -- pool ids are router-scoped, not `laneFor` --
+    /// but kept because the fork tests derive the registry lane slot from it.
     function laneFor(address tokenIn, address tokenOut)
         external
         pure

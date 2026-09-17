@@ -200,9 +200,10 @@ fn get_new_pairs(
 /// block the package sees.
 #[substreams::handlers::store]
 fn store_router_state(params: String, block: Block, store: StoreSetString) {
-    let Ok(config) = serde_qs::from_str::<Config>(params.as_str()) else {
-        return;
-    };
+    // Panic rather than return: a silent empty store yields zero components and no error, so a
+    // malformed params string would look like a venue that never traded.
+    let config: Config = serde_qs::from_str(params.as_str())
+        .unwrap_or_else(|e| panic!("invalid module params: {e}"));
 
     for trx in block.transactions() {
         for (log, _) in trx.logs_with_calls() {
@@ -249,9 +250,10 @@ fn router_paused(router_state_store: &StoreGetString) -> bool {
 /// a router unpause does not revive a pair that was separately removed.
 #[substreams::handlers::store]
 fn store_pair_registered(params: String, block: Block, store: StoreSetString) {
-    let Ok(config) = serde_qs::from_str::<Config>(params.as_str()) else {
-        return;
-    };
+    // Panic rather than return: a silent empty store yields zero components and no error, so a
+    // malformed params string would look like a venue that never traded.
+    let config: Config = serde_qs::from_str(params.as_str())
+        .unwrap_or_else(|e| panic!("invalid module params: {e}"));
 
     let mut on_pair_registered = |event: PairRegistered, _tx: &TransactionTrace, log: &Log| {
         let id = component_id(&config.router_address, &event.token0, &event.token1);

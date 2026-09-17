@@ -4,7 +4,7 @@ import "../TychoRouterTestSetup.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// @dev A block carrying a committed USDC/WETH lane, after the router upgrade at
-/// block 25744018 that removed the taker allowlist. Lane payloads persist in
+/// block 25744018 that turned on `openTakerAccess`. Lane payloads persist in
 /// registry storage after the commit, so the ladder is readable; only the
 /// timestamp goes stale, which `_refreshLane` restamps.
 uint256 constant TEMPEST_FORK_BLOCK = 25963848;
@@ -12,8 +12,11 @@ uint256 constant TEMPEST_FORK_BLOCK = 25963848;
 /// @dev Shared fork fixtures for Tempest: a swap only settles if the lane is
 /// inside the router's freshness window. On chain the builder guarantees that by
 /// ordering the maker's quote tx directly ahead of the fill; here it is set with
-/// `vm.store`. The taker allowlist that used to gate settlement was removed in
-/// the router upgrade at block 25744018, so no taker fixture is needed.
+/// `vm.store`. No taker fixture is needed at this block because the venue's
+/// `openTakerAccess` flag is on, which bypasses the `allowedTaker` check. The
+/// gate itself is intact -- an OPERATOR can turn the flag off, and a blocked
+/// taker is rejected regardless -- so this test proves the path works today,
+/// not that settlement is permanently ungated.
 abstract contract TempestFixtures is Constants {
     function _refreshLane(address tokenA, address tokenB) internal {
         bytes32 laneSlot = keccak256(
@@ -78,5 +81,4 @@ contract TempestRouterTest is TychoRouterTestSetup, TempestFixtures {
         assertEq(IERC20(WETH_ADDR).balanceOf(tychoRouterAddr), 0);
         assertEq(IERC20(USDC_ADDR).balanceOf(tychoRouterAddr), 0);
     }
-
 }

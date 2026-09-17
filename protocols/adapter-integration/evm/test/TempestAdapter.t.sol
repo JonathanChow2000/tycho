@@ -25,8 +25,9 @@ contract TempestAdapterTest is AdapterTest {
         // The maker's last committed lane for USDC/WETH. Lane payloads persist
         // in registry storage after the commit, so the ladder is readable here;
         // only the timestamp goes stale, which _refreshLane restamps.
-        // After the router upgrade at block 25744018 that removed the taker
-        // allowlist, so `swap` settles from the adapter's own address.
+        // After the router upgrade at block 25744018 that turned on
+        // `openTakerAccess`, so `swap` settles from the adapter's own address
+        // without an `allowedTaker` entry. The gate is intact, just bypassed.
         vm.createSelectFork(vm.rpcUrl("mainnet"), 25963848);
         _refreshLane(USDC, WETH);
 
@@ -182,8 +183,6 @@ contract TempestAdapterTest is AdapterTest {
         assertLe(limits[1], IERC20(USDC).balanceOf(TEMPEST_VAULT));
     }
 
-    /// A pair with no lane ever committed must report zero limits rather than
-    /// bubbling up the router's `StaleUpdate` revert.
     /// Every registered pair carries a committed ladder at this block, so a
     /// second pair must quote as well as the one refreshed in `setUp`.
     function testGetLimitsSecondPair() public {

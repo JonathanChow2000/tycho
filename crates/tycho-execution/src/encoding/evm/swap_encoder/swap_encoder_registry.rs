@@ -7,7 +7,7 @@ use crate::encoding::{
     evm::{
         constants::{
             DEFAULT_EXECUTORS_JSON, PRICE_LEVEL_STREAM_KEY, PRICE_LEVEL_STREAM_PREFIX,
-            PROPAMM_FALLBACK_KEY, PROPAMM_FALLBACK_PREFIX, PROTOCOL_SPECIFIC_CONFIG,
+            PROPAMM_FALLBACK_KEY, PROPAMM_FALLBACK_PREFIX, PROTOCOL_SPECIFIC_CONFIG, TEMPEST_KEY,
         },
         swap_encoder::{
             aerodrome_v1::AerodromeV1SwapEncoder, balancer_v2::BalancerV2SwapEncoder,
@@ -242,7 +242,7 @@ impl SwapEncoderRegistry {
                 pls.starts_with(PROPAMM_FALLBACK_PREFIX) ||
                 // Tempest implements `IPropAMM`, so the generic executor serves it; the venue
                 // address comes from the component's `pamm_address` attribute.
-                pls == "vm:tempest" =>
+                pls == TEMPEST_KEY =>
             {
                 Ok(Box::new(PropAMMSwapEncoder::new(executor_address, self.chain, config)?))
             }

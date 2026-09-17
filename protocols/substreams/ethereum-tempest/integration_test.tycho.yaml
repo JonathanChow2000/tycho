@@ -83,8 +83,9 @@ tests:
         # rejects it. The harness replays encoded calldata against forked state at `stop_block`,
         # where the live implementation is 0xc85509ed — one that still gates settlement on
         # `allowedTaker[msg.sender]`, so every fill reverts `TakerNotAllowed` (0xf774ea08).
-        # The upgrade at block 25744018 (implementation 0x40b05afd) removed that gate; a
-        # non-allowlisted caller settles against it, which is what
+        # The upgrade at block 25744018 (implementation 0x40b05afd) turned on the venue's
+        # OPERATOR-settable `openTakerAccess` flag, which bypasses `allowedTaker`; the gate
+        # itself is intact. A non-allowlisted caller settles against it today, which is what
         # `tycho-execution/contracts/test/protocols/Tempest.t.sol::testSingleSwap` now exercises
         # at block 25963848 with no taker fixture at all.
         #
