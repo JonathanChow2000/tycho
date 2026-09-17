@@ -204,11 +204,12 @@ pub(crate) mod tests {
         }
     }
 
-    /// The implementations behind the four proxies at block 25940000.
+    /// The implementations behind the five proxies at block 25940000.
     pub(crate) fn recorded_implementations() -> HashMap<String, String> {
         [
             ("liquidity_pool", "0x17a16747d03006c9754548ac0d0aff48783a4a45"),
             ("eeth", "0xd1901dd36cbf4a81386d0162df2707f7ddb60527"),
+            ("weeth", "0xa6ca0607190d03cf16fe6f2865cf40c3d160ccf3"),
             ("redemption_manager", "0x5d53b303d62a7861f88650045b8d5deb59dfb3dc"),
             ("rate_limiter", "0x9ea4d0fd09b628e23b1998f2153e27e5261b1b67"),
         ]

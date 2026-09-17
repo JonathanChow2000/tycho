@@ -70,7 +70,8 @@ FAILURES=0
 
 check() {
     local what="$1" want="$2" got="$3"
-    if [[ "${want,,}" != "${got,,}" ]]; then
+    if [[ "$(printf '%s' "$want" | tr '[:upper:]' '[:lower:]')" != \
+          "$(printf '%s' "$got" | tr '[:upper:]' '[:lower:]')" ]]; then
         echo "MISMATCH $what: chain says $want, the slots decode to $got" >&2
         FAILURES=$((FAILURES + 1))
     fi
@@ -88,9 +89,9 @@ implementation_of() {
 # a fresh snapshot.
 check_implementation() {
     local name="$1" proxy="$2" live="$3" expected="$4"
-    if [[ "$live" != "${expected,,}" ]]; then
+    if [[ "$live" != "$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]')" ]]; then
         echo "UPGRADED $name: $proxy now runs $live, not $expected." >&2
-        echo "  Re-verify every slot in src/constants.rs against the new implementation." >&2
+        echo "  Re-verify the tracked slots and simulation behavior against the new implementation." >&2
         FAILURES=$((FAILURES + 1))
     fi
 }
@@ -109,6 +110,7 @@ echo "Verifying the tracked slots against the chain..." >&2
 
 liquidity_pool_implementation=$(implementation_of "$LIQUIDITY_POOL")
 eeth_implementation=$(implementation_of "$EETH")
+weeth_implementation=$(implementation_of "$WEETH")
 redemption_manager_implementation=$(implementation_of "$REDEMPTION_MANAGER")
 rate_limiter_implementation=$(implementation_of "$RATE_LIMITER")
 
@@ -116,6 +118,8 @@ check_implementation "LiquidityPool" "$LIQUIDITY_POOL" "$liquidity_pool_implemen
     "0x17a16747d03006c9754548ac0d0aff48783a4a45"
 check_implementation "eETH" "$EETH" "$eeth_implementation" \
     "0xd1901dd36cbf4a81386d0162df2707f7ddb60527"
+check_implementation "weETH" "$WEETH" "$weeth_implementation" \
+    "0xa6ca0607190d03cf16fe6f2865cf40c3d160ccf3"
 check_implementation "EtherFiRedemptionManager" "$REDEMPTION_MANAGER" \
     "$redemption_manager_implementation" "0x5d53b303d62a7861f88650045b8d5deb59dfb3dc"
 check_implementation "EtherFiRateLimiter" "$RATE_LIMITER" "$rate_limiter_implementation" \
@@ -178,6 +182,7 @@ cat <<EOF
   "implementations": {
     "liquidity_pool": "$liquidity_pool_implementation",
     "eeth": "$eeth_implementation",
+    "weeth": "$weeth_implementation",
     "redemption_manager": "$redemption_manager_implementation",
     "rate_limiter": "$rate_limiter_implementation"
   }

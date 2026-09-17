@@ -405,22 +405,26 @@ impl EtherfiState {
         )?;
         let fee_shares_to_stakers = safe_sub_u256(fee_shares, fee_shares_to_treasury)?;
 
-        // The contract meters each burn at the share rate of the moment it happens, which sits
-        // between the pre- and post-redemption rates; metering both at the pre-redemption rate
-        // can differ from it by a gwei unit.
-        let burnt = gwei_units(amount_out)
-            .saturating_add(gwei_units(self.amount_for_share(fee_shares_to_stakers)?));
-        pool.burn_limit = pool
-            .burn_limit
-            .consume(burnt, self.execution_block_timestamp)
-            .ok_or_else(|| SimulationError::RecoverableError("BURN_RATE_LIMIT".to_string()))?;
-
+        // `burnShares` values each burn after removing its shares. The withdrawal first
+        // reduces pooled ether; the stakers' fee then raises the rate for the second burn.
         let mut next = self.clone();
         next.total_value_in_lp = safe_sub_u256(liquid, amount_out)?;
-        next.total_shares = safe_sub_u256(
-            self.total_shares,
-            safe_add_u256(shares_to_burn, fee_shares_to_stakers)?,
-        )?;
+        next.total_shares = safe_sub_u256(self.total_shares, shares_to_burn)?;
+        pool.burn_limit = pool
+            .burn_limit
+            .consume(
+                gwei_units(next.amount_for_share(shares_to_burn)?),
+                self.execution_block_timestamp,
+            )
+            .ok_or_else(|| SimulationError::RecoverableError("BURN_RATE_LIMIT".to_string()))?;
+        next.total_shares = safe_sub_u256(next.total_shares, fee_shares_to_stakers)?;
+        pool.burn_limit = pool
+            .burn_limit
+            .consume(
+                gwei_units(next.amount_for_share(fee_shares_to_stakers)?),
+                self.execution_block_timestamp,
+            )
+            .ok_or_else(|| SimulationError::RecoverableError("BURN_RATE_LIMIT".to_string()))?;
         next.venue = Venue::Pool(pool);
 
         Ok(GetAmountOutResult::new(
@@ -574,8 +578,8 @@ impl ProtocolSim for EtherfiState {
         }
     }
 
-    /// The largest sell each direction settles, and what it pays. A pair this component does
-    /// not hold is an error.
+    /// A conservative sell bound each direction settles, and what it pays. A pair this component
+    /// does not hold is an error.
     fn get_limits(
         &self,
         sell_token: Bytes,
@@ -609,8 +613,8 @@ impl ProtocolSim for EtherfiState {
                             U256::from(REDEMPTION_BUCKET_UNIT),
                     )
                     // `amount_out` and the stakers' fee are metered separately and each
-                    // conversion to bucket units rounds up, so the pair can cost one unit more
-                    // than the whole input does. Reserving it keeps the limit quotable.
+                    // conversion to bucket units rounds up. Reserve one unit for rounding;
+                    // the ordered burn check below also accounts for the changing share rate.
                     .min(
                         U256::from(
                             pool.burn_limit
@@ -621,10 +625,47 @@ impl ProtocolSim for EtherfiState {
                 if max_in.is_zero() {
                     return Ok((BigUint::ZERO, BigUint::ZERO));
                 }
-                let max_out = self
-                    .amount_out_eeth_to_eth(pool, max_in)?
-                    .amount;
-                Ok((u256_to_biguint(max_in), max_out))
+                match self.amount_out_eeth_to_eth(pool, max_in) {
+                    Ok(result) => Ok((u256_to_biguint(max_in), result.amount)),
+                    Err(SimulationError::RecoverableError(reason))
+                        if reason == "BURN_RATE_LIMIT" =>
+                    {
+                        // Burning the stakers' fee raises the rate used to meter that burn.
+                        // With little or no treasury share, the charge can exceed the input;
+                        // find the executable boundary using the same ordered contract math.
+                        let mut low = U256::ZERO;
+                        let mut high = max_in;
+                        let mut output = BigUint::ZERO;
+                        while low < high {
+                            let mid = low + (high - low).div_ceil(U256::from(2));
+                            match self.amount_out_eeth_to_eth(pool, mid) {
+                                Ok(result) => {
+                                    low = mid;
+                                    output = result.amount;
+                                }
+                                Err(SimulationError::RecoverableError(reason))
+                                    if reason == "BURN_RATE_LIMIT" =>
+                                {
+                                    high = mid - U256::from(1);
+                                }
+                                Err(SimulationError::RecoverableError(reason))
+                                    if reason == "ZERO_AMOUNT" =>
+                                {
+                                    low = mid;
+                                }
+                                Err(error) => return Err(error),
+                            }
+                        }
+                        if output == BigUint::ZERO {
+                            return Ok((BigUint::ZERO, BigUint::ZERO));
+                        }
+                        Ok((u256_to_biguint(low), output))
+                    }
+                    Err(SimulationError::RecoverableError(reason)) if reason == "ZERO_AMOUNT" => {
+                        Ok((BigUint::ZERO, BigUint::ZERO))
+                    }
+                    Err(error) => Err(error),
+                }
             }
             // Wrapping is not capped by the protocol; no more eETH can be wrapped than exists
             // outside the wrapper.
@@ -1120,11 +1161,69 @@ mod tests {
 
         // Both burns are metered in gwei, rounded up, against the eETH burn bucket, which has
         // refilled to its 25,000 ETH capacity by this block: 997000000 units for the payout and
-        // 2415546 for the stakers' fee.
+        // 2700001 for the stakers' fee.
         let Venue::Pool(pool) = &next.venue else {
             panic!("the pool component stays a pool");
         };
         assert_eq!(pool.burn_limit.remaining, 24_999_000_299_999);
+    }
+
+    #[test]
+    fn redemption_burn_metering_uses_each_post_burn_share_rate() {
+        let state = pool_state_with_liquidity();
+        let result = state
+            .get_amount_out(
+                u256_to_biguint(one_eth() * U256::from(1000)),
+                &eeth_token(),
+                &eth_token(),
+            )
+            .expect("redemption");
+        let next = state_of(&result);
+        let Venue::Pool(pool) = next.venue else { panic!("pool") };
+        // Verified contract ordering: withdraw reduces pooled ether, then each burn reduces
+        // totalShares before valuing its shares for the burn bucket. The two burns consume
+        // 997000000000 and 2700003261 gwei units respectively.
+        assert_eq!(pool.burn_limit.remaining, 24_000_299_996_739);
+    }
+
+    #[test]
+    fn redemption_rejects_burn_capacity_below_post_burn_charge() {
+        let mut state = pool_state_with_liquidity();
+        let Venue::Pool(ref mut pool) = state.venue else { panic!("pool") };
+        pool.burn_limit.remaining = 999_700_000_001;
+        pool.burn_limit.last_refill = BLOCK_TIMESTAMP;
+        // Sufficient for pre-burn valuation, but 3260 units short of the on-chain charge.
+        let err = state
+            .get_amount_out(
+                u256_to_biguint(one_eth() * U256::from(1000)),
+                &eeth_token(),
+                &eth_token(),
+            )
+            .unwrap_err();
+        assert_eq!(recoverable(err), "BURN_RATE_LIMIT");
+    }
+
+    #[test]
+    fn redemption_limit_remains_executable_when_all_fees_go_to_stakers() {
+        let mut state = pool_state_with_liquidity();
+        let Venue::Pool(ref mut pool) = state.venue else { panic!("pool") };
+        pool.redemption
+            .exit_fee_split_to_treasury_bps = 0;
+        pool.burn_limit.capacity = 1_000_000_000_000;
+        pool.burn_limit.remaining = 1_000_000_000_000;
+        pool.burn_limit.last_refill = BLOCK_TIMESTAMP;
+        let (limit, output) = state
+            .get_limits(Bytes::from(EETH_ADDRESS), Bytes::from(ETH_ADDRESS))
+            .expect("executable limit");
+        assert_eq!(limit, u256_to_biguint(u256_dec("999999995973921765298")));
+        let quote = state
+            .get_amount_out(limit.clone(), &eeth_token(), &eth_token())
+            .expect("limit quotes");
+        assert_eq!(quote.amount, output);
+        let err = state
+            .get_amount_out(limit + BigUint::from(1u64), &eeth_token(), &eth_token())
+            .unwrap_err();
+        assert_eq!(recoverable(err), "BURN_RATE_LIMIT");
     }
 
     /// Both components report zero. The wrapper's is its real fee; the pool's understates the

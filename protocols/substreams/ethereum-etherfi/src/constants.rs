@@ -36,21 +36,22 @@ pub const WRAPPER_COMPONENT_ID: &str = "0xcd5fe23c85820f7b72d0926fc9b05b43e359b7
 pub const EIP1967_IMPLEMENTATION_POSITION: [u8; 32] =
     hex!("360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc");
 
-/// A proxy whose storage this package reads.
+/// A proxy whose storage or execution behavior this integration relies on.
 ///
 /// The tracked slots belong to the implementation recorded in the manifest's `implementations`
-/// under `label`. Another implementation may lay its storage out differently, so both components
-/// pause on the block that installs one, until someone re-verifies the slots and records it.
+/// under `label`. Another implementation may change its storage layout or swap behavior, so both
+/// components pause on the block that installs one, until its storage and behavior are re-verified.
 pub struct TrackedProxy {
     pub label: &'static str,
     pub proxy: [u8; 20],
 }
 
-/// Every proxy whose implementation change pauses the components. weETH is read through eETH's
-/// share mapping, not its own storage.
-pub const TRACKED_PROXIES: [TrackedProxy; 4] = [
+/// Every proxy whose implementation change pauses the components. weETH upgrades can change
+/// wrap and unwrap behavior even though its balance is read through eETH's share mapping.
+pub const TRACKED_PROXIES: [TrackedProxy; 5] = [
     TrackedProxy { label: "liquidity_pool", proxy: LIQUIDITY_POOL_ADDRESS },
     TrackedProxy { label: "eeth", proxy: EETH_ADDRESS },
+    TrackedProxy { label: "weeth", proxy: WEETH_ADDRESS },
     TrackedProxy { label: "redemption_manager", proxy: REDEMPTION_MANAGER_ADDRESS },
     TrackedProxy { label: "rate_limiter", proxy: RATE_LIMITER_ADDRESS },
 ];

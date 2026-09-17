@@ -2,7 +2,8 @@
 //!
 //! Neither contract has a creation event to discover, so the manifest carries a storage snapshot
 //! in `params`, along with the transaction in `start_block` to anchor the components to. Every
-//! later block is driven by raw storage writes on the four contracts the venue spans.
+//! later block is driven by raw storage writes on four contracts, with upgrade guards on all five
+//! proxies whose code the integration relies on.
 //!
 //! Handlers below are in manifest order.
 
@@ -26,7 +27,7 @@ use crate::{
     },
     state::{unpack_fields, BalanceState, InitialState},
     upgrades::detect_upgrades,
-    utils::bytes_from_hex,
+    utils::{bytes_from_hex, ordered_storage_changes},
 };
 
 /// Creates both components on `start_block`, and nothing on any other block.
@@ -103,23 +104,17 @@ pub fn store_balance_slots(params: String, block: eth::v2::Block, store: StoreSe
 fn balance_store_writes(block: &eth::v2::Block) -> Vec<(u64, &'static str, BigInt)> {
     let mut writes = Vec::new();
     for tx in block.transactions() {
-        for call in tx
-            .calls
-            .iter()
-            .filter(|call| !call.state_reverted)
-        {
-            for storage_change in &call.storage_changes {
-                let Some(key) = tracked_slot(&storage_change.address, &storage_change.key)
-                    .and_then(|slot| slot.balance_key)
-                else {
-                    continue;
-                };
-                writes.push((
-                    storage_change.ordinal,
-                    key,
-                    BigInt::from_unsigned_bytes_be(&storage_change.new_value),
-                ));
-            }
+        for storage_change in ordered_storage_changes(tx) {
+            let Some(key) = tracked_slot(&storage_change.address, &storage_change.key)
+                .and_then(|slot| slot.balance_key)
+            else {
+                continue;
+            };
+            writes.push((
+                storage_change.ordinal,
+                key,
+                BigInt::from_unsigned_bytes_be(&storage_change.new_value),
+            ));
         }
     }
     writes
@@ -247,38 +242,31 @@ fn handle_state_updates(
         let mut pool_balance_touched = false;
         let mut wrapper_balance_touched = false;
 
-        for call in tx
-            .calls
-            .iter()
-            .filter(|call| !call.state_reverted)
-        {
-            for storage_change in &call.storage_changes {
-                let Some(tracked) = tracked_slot(&storage_change.address, &storage_change.key)
-                else {
-                    continue;
-                };
+        for storage_change in ordered_storage_changes(tx) {
+            let Some(tracked) = tracked_slot(&storage_change.address, &storage_change.key) else {
+                continue;
+            };
 
-                let builder = transaction_changes
-                    .entry(tx.index as u64)
-                    .or_insert_with(|| TransactionChangesBuilder::new(&(tx.into())));
+            let builder = transaction_changes
+                .entry(tx.index as u64)
+                .or_insert_with(|| TransactionChangesBuilder::new(&(tx.into())));
 
-                for component in tracked.components {
-                    builder.add_entity_change(&EntityChanges {
-                        component_id: component.id().to_string(),
-                        attributes: unpack_fields(
-                            tracked,
-                            &storage_change.new_value,
-                            ChangeType::Update,
-                        ),
-                    });
-                }
+            for component in tracked.components {
+                builder.add_entity_change(&EntityChanges {
+                    component_id: component.id().to_string(),
+                    attributes: unpack_fields(
+                        tracked,
+                        &storage_change.new_value,
+                        ChangeType::Update,
+                    ),
+                });
+            }
 
-                if let Some(key) = tracked.balance_key {
-                    balances.apply(key, BigInt::from_unsigned_bytes_be(&storage_change.new_value));
-                    // The pool balance is the value word alone; the wrapper's needs all three.
-                    pool_balance_touched |= key == LIQUIDITY_POOL_VALUE_KEY;
-                    wrapper_balance_touched = true;
-                }
+            if let Some(key) = tracked.balance_key {
+                balances.apply(key, BigInt::from_unsigned_bytes_be(&storage_change.new_value));
+                // The pool balance is the value word alone; the wrapper's needs all three.
+                pool_balance_touched |= key == LIQUIDITY_POOL_VALUE_KEY;
+                wrapper_balance_touched = true;
             }
         }
 
@@ -529,6 +517,31 @@ mod tests {
     }
 
     #[test]
+    fn a_weeth_upgrade_pauses_both_components() {
+        let change = crate::upgrades::fixtures::upgrade_write(WEETH_ADDRESS, OTHER);
+        let block = block_with(vec![change], false);
+        let mut transaction_changes = HashMap::new();
+        pause_on_upgrade(&block, &initial_state(), &mut transaction_changes).expect("pause");
+        let changes = transaction_changes
+            .remove(&7)
+            .expect("weETH upgrade must pause the components")
+            .build()
+            .expect("pause changes");
+        assert_eq!(changes.entity_changes.len(), 2);
+        for component in [Component::Pool, Component::Wrapper] {
+            let entity = changes
+                .entity_changes
+                .iter()
+                .find(|entity| entity.component_id == component.id())
+                .expect("component is paused");
+            assert!(entity
+                .attributes
+                .iter()
+                .any(|attribute| attribute.name == "paused" && attribute.value == vec![1]));
+        }
+    }
+
+    #[test]
     fn writing_the_recorded_implementation_changes_nothing() {
         let block = block_with(vec![rate_limiter_upgrade_to(RATE_LIMITER_V1)], false);
         let mut transaction_changes = HashMap::new();
@@ -665,5 +678,81 @@ mod tests {
     #[should_panic(expected = "non-UTF-8")]
     fn a_non_utf8_store_value_panics() {
         decode_store_value(TOTAL_SHARES_KEY, &[0xff, 0xfe]);
+    }
+}
+
+#[cfg(test)]
+mod review_regressions {
+    use super::*;
+    use crate::constants::{
+        EETH_TOTAL_SHARES_POSITION, ETH_REDEMPTION_INFO_POSITION, REDEMPTION_MANAGER_ADDRESS,
+    };
+    use substreams_ethereum::pb::eth::v2::{
+        Call, StorageChange, TransactionTrace, TransactionTraceStatus,
+    };
+    fn nested_writes(address: [u8; 20], key: [u8; 32]) -> eth::v2::Block {
+        let write = |ordinal, value| StorageChange {
+            address: address.to_vec(),
+            key: key.to_vec(),
+            ordinal,
+            new_value: vec![value; 32],
+            ..Default::default()
+        };
+        eth::v2::Block {
+            transaction_traces: vec![TransactionTrace {
+                index: 3,
+                status: TransactionTraceStatus::Succeeded as i32,
+                // The parent resumes after the child and writes the final value.
+                calls: vec![
+                    Call {
+                        index: 1,
+                        storage_changes: vec![write(10, 1), write(30, 3)],
+                        ..Default::default()
+                    },
+                    Call {
+                        index: 2,
+                        parent_index: 1,
+                        storage_changes: vec![write(20, 2)],
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+    #[test]
+    fn nested_calls_emit_the_last_executed_attribute_write() {
+        let block = nested_writes(REDEMPTION_MANAGER_ADDRESS, ETH_REDEMPTION_INFO_POSITION);
+        let mut updates = HashMap::new();
+        handle_state_updates(
+            &block,
+            &StoreDeltas::default(),
+            &StoreGetBigInt::new(0),
+            &mut updates,
+        );
+        let changes = updates
+            .remove(&3)
+            .unwrap()
+            .build()
+            .unwrap();
+        let fee = changes.entity_changes[0]
+            .attributes
+            .iter()
+            .find(|a| a.name == "exit_fee_bps")
+            .unwrap();
+        assert_eq!(BigInt::from_unsigned_bytes_be(&fee.value), BigInt::from(0x0303u32));
+    }
+    #[test]
+    fn nested_calls_write_balance_store_in_execution_order() {
+        let block = nested_writes(EETH_ADDRESS, EETH_TOTAL_SHARES_POSITION);
+        let writes = balance_store_writes(&block);
+        assert_eq!(
+            writes
+                .iter()
+                .map(|(ordinal, _, _)| *ordinal)
+                .collect::<Vec<_>>(),
+            vec![10, 20, 30]
+        );
     }
 }

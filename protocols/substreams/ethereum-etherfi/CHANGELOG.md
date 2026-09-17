@@ -12,10 +12,10 @@ block 25533308. Two components, both driven by raw storage writes:
 - `weETH` (`0xCd5f...b7ee`) — eETH wrap and unwrap. Carries the pool totals and
   `eETH.shares(weETH)`, which bounds unwrapping.
 
-The manifest records the implementation behind each of the four proxies the tracked slots were
-verified against. All four are EIP-1967, so the package watches their implementation slot and
-pauses both components on the block that installs any other implementation. They stay paused
-until the slots are re-verified and a new snapshot is taken.
+The manifest records the implementation behind each of the five proxies the storage and simulation
+were verified against, including weETH. All five are EIP-1967, so the package watches their
+implementation slot and pauses both components on the block that installs any other implementation.
+They stay paused until the slots and swap behavior are re-verified and a new snapshot is taken.
 
 Both contracts were deployed in 2023, so the package does not pick the components up from their
 creation transactions - it would have to index from there to reach today's state. The manifest
