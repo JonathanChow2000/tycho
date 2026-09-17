@@ -139,6 +139,23 @@ pub struct RedemptionInfo {
     pub low_watermark_bps: u16,
 }
 
+impl RedemptionInfo {
+    /// The share of a redemption that reaches the redeemer, in basis points.
+    ///
+    /// `EtherFiRedemptionManager` rejects an exit fee above the basis-point scale, so one here
+    /// came off the wire malformed rather than off the chain, and subtracting it would wrap.
+    fn net_of_exit_fee_bps(&self) -> Result<u64, SimulationError> {
+        BASIS_POINT_SCALE
+            .checked_sub(u64::from(self.exit_fee_bps))
+            .ok_or_else(|| {
+                SimulationError::FatalError(format!(
+                    "exit fee of {} bps exceeds the basis-point scale",
+                    self.exit_fee_bps
+                ))
+            })
+    }
+}
+
 /// `BucketLimiter.Limit`: a token bucket that refills at `refill_rate` units per second up to
 /// `capacity`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -369,7 +386,7 @@ impl EtherfiState {
         let eeth_shares = self.shares_for_amount(amount_in)?;
         let net_shares = mul_div(
             eeth_shares,
-            U256::from(BASIS_POINT_SCALE - u64::from(pool.redemption.exit_fee_bps)),
+            U256::from(pool.redemption.net_of_exit_fee_bps()?),
             U256::from(BASIS_POINT_SCALE),
         )?;
         let amount_out = self.amount_for_share(net_shares)?;
@@ -492,6 +509,13 @@ enum VenueFields {
 
 #[typetag::serde]
 impl ProtocolSim for EtherfiState {
+    /// Zero, for both components.
+    ///
+    /// The wrapper charges nothing in either direction. The pool charges the exit fee on
+    /// `eETH -> ETH` and nothing on `ETH -> eETH`, and this interface carries one value with no
+    /// direction to attach it to, so the exit fee reaches callers through `spot_price` and
+    /// `get_amount_out`, which both apply it. It belongs here once `ProtocolSim` can express a
+    /// fee per direction.
     fn fee(&self) -> f64 {
         0f64
     }
@@ -514,7 +538,7 @@ impl ProtocolSim for EtherfiState {
             (Venue::Pool(pool), EETH, ETH) => {
                 let net_shares = mul_div(
                     self.shares_for_amount(base_unit)?,
-                    U256::from(BASIS_POINT_SCALE - u64::from(pool.redemption.exit_fee_bps)),
+                    U256::from(pool.redemption.net_of_exit_fee_bps()?),
                     U256::from(BASIS_POINT_SCALE),
                 )?;
                 to_price(self.amount_for_share(net_shares)?)
@@ -584,7 +608,16 @@ impl ProtocolSim for EtherfiState {
                         U256::from(pool.redemption.limit.consumable(now)) *
                             U256::from(REDEMPTION_BUCKET_UNIT),
                     )
-                    .min(U256::from(pool.burn_limit.consumable(now)) * U256::from(GWEI));
+                    // `amount_out` and the stakers' fee are metered separately and each
+                    // conversion to bucket units rounds up, so the pair can cost one unit more
+                    // than the whole input does. Reserving it keeps the limit quotable.
+                    .min(
+                        U256::from(
+                            pool.burn_limit
+                                .consumable(now)
+                                .saturating_sub(1),
+                        ) * U256::from(GWEI),
+                    );
                 if max_in.is_zero() {
                     return Ok((BigUint::ZERO, BigUint::ZERO));
                 }
@@ -732,9 +765,15 @@ impl ProtocolSim for EtherfiState {
                     wrapper.weeth_shares = value;
                 }
             }
-            // `venue_fields` is built from `self.venue`, which nothing above changes.
+            // `venue_fields` is decoded against `self.venue`, which nothing above changes, so
+            // the two always agree. A delta that somehow disagreed is reported, which fails the
+            // one component rather than the stream it arrived on.
             (Venue::Pool(_), VenueFields::Wrapper { .. }) |
-            (Venue::Wrapper(_), VenueFields::Pool { .. }) => unreachable!(),
+            (Venue::Wrapper(_), VenueFields::Pool { .. }) => {
+                return Err(TransitionError::DecodeError(
+                    "the decoded attributes belong to the other component".to_string(),
+                ))
+            }
         }
         Ok(())
     }
@@ -1067,39 +1106,59 @@ mod tests {
             .get_amount_out(u256_to_biguint(one_eth()), &eeth_token(), &eth_token())
             .expect("amount out");
 
-        let amount_out = biguint_to_u256(&result.amount);
-        let expected = state
-            .amount_for_share(
-                mul_div(
-                    state
-                        .shares_for_amount(one_eth())
-                        .expect("shares"),
-                    U256::from(9_970u64),
-                    U256::from(10_000u64),
-                )
-                .expect("net shares"),
-            )
-            .expect("amount");
-        assert_eq!(amount_out, expected);
-        assert!(
-            amount_out < one_eth() &&
-                amount_out > one_eth() * U256::from(996u64) / U256::from(1000u64)
-        );
+        // 30 bps off one eETH, and the payout is worth 891962367676204779 shares.
+        assert_eq!(result.amount, BigUint::from(996_999_999_999_999_999u64));
 
         let next = state_of(&result);
-        assert_eq!(next.total_value_in_lp, state.total_value_in_lp - amount_out);
-        let eeth_shares = state
-            .shares_for_amount(one_eth())
-            .expect("shares");
-        let burnt = state.total_shares - next.total_shares;
-        let treasury = eeth_shares - burnt;
-        // Burnt: what the payout is worth plus the stakers' 90% of the fee shares.
-        let shares_to_burn = state
-            .shares_for_withdrawal_amount(amount_out)
-            .expect("shares");
-        let fee_shares = eeth_shares - shares_to_burn;
-        assert_eq!(treasury, fee_shares / U256::from(10u64));
-        assert_eq!(burnt, shares_to_burn + (fee_shares - treasury));
+        // The redemption is paid out of `totalValueInLp`.
+        assert_eq!(next.total_value_in_lp, u256_dec("29999003000000000000001"));
+        // `sharesForWithdrawalAmount` rounds up, so the pool keeps the odd wei-share. What
+        // leaves `totalShares` is the payout's shares plus the stakers' nine tenths of the
+        // 2683938919787979 fee shares; the treasury keeps the other tenth as eETH.
+        assert_eq!(state.total_shares - next.total_shares, u256_dec("894377912704013961"));
+        assert_eq!(next.total_shares, u256_dec("2001242597178221409918792"));
+
+        // Both burns are metered in gwei, rounded up, against the eETH burn bucket, which has
+        // refilled to its 25,000 ETH capacity by this block: 997000000 units for the payout and
+        // 2415546 for the stakers' fee.
+        let Venue::Pool(pool) = &next.venue else {
+            panic!("the pool component stays a pool");
+        };
+        assert_eq!(pool.burn_limit.remaining, 24_999_000_299_999);
+    }
+
+    /// Both components report zero. The wrapper's is its real fee; the pool's understates the
+    /// exit fee it charges one way, which this interface cannot express and `spot_price` and
+    /// `get_amount_out` carry instead.
+    #[test]
+    fn fee_is_zero_until_the_interface_can_carry_a_direction() {
+        assert_eq!(wrapper_state().fee(), 0.0);
+        assert_eq!(pool_state().fee(), 0.0);
+
+        // The exit fee is in the quote, which is where a caller has to read it.
+        let quoted = pool_state_with_liquidity()
+            .get_amount_out(u256_to_biguint(one_eth()), &eeth_token(), &eth_token())
+            .expect("amount out");
+        assert!(biguint_to_u256(&quoted.amount) < one_eth());
+    }
+
+    /// The redemption manager rejects an exit fee above the basis-point scale, so one that
+    /// arrives anyway is malformed. Subtracting it would wrap in a release build and quote a
+    /// payout many times the input.
+    #[test]
+    fn an_exit_fee_above_the_basis_point_scale_is_refused() {
+        let mut state = pool_state_with_liquidity();
+        if let Venue::Pool(pool) = &mut state.venue {
+            pool.redemption.exit_fee_bps = 10_001;
+        }
+
+        let err = state
+            .get_amount_out(u256_to_biguint(one_eth()), &eeth_token(), &eth_token())
+            .unwrap_err();
+        assert!(matches!(err, SimulationError::FatalError(_)), "{err:?}");
+        assert!(state
+            .spot_price(&eeth_token(), &eth_token())
+            .is_err());
     }
 
     /// 7,600 ETH above the floor, but the redemption bucket holds 2,000 ETH.
@@ -1668,6 +1727,51 @@ mod tests {
 
     /// Every pair of the tokens either component can hold, so a direction added later is
     /// covered here without anyone remembering to add a case.
+    /// The pool with 100 gwei of burn capacity, far under the liquidity above the floor and
+    /// under the redemption bucket, so the burn bucket is what bounds redemption.
+    fn pool_state_bound_by_the_burn_bucket() -> EtherfiState {
+        let mut state = pool_state_with_liquidity();
+        if let Venue::Pool(pool) = &mut state.venue {
+            pool.burn_limit = BucketLimit {
+                capacity: 100,
+                remaining: 100,
+                last_refill: BLOCK_TIMESTAMP,
+                refill_rate: 0,
+            };
+        }
+        state
+    }
+
+    /// The pool with five units of redemption capacity left, so the redemption manager's own
+    /// bucket is what bounds redemption.
+    fn pool_state_bound_by_the_redemption_bucket() -> EtherfiState {
+        let mut state = pool_state_with_liquidity();
+        if let Venue::Pool(pool) = &mut state.venue {
+            pool.redemption.limit = BucketLimit {
+                capacity: 5,
+                remaining: 5,
+                last_refill: BLOCK_TIMESTAMP,
+                refill_rate: 0,
+            };
+        }
+        state
+    }
+
+    /// The pairs a component's venue performs, which are the pairs its three entry points
+    /// answer for.
+    fn supported_pairs(state: &EtherfiState) -> Vec<(Bytes, Bytes)> {
+        match state.venue {
+            Venue::Pool(_) => vec![
+                (Bytes::from(ETH_ADDRESS), Bytes::from(EETH_ADDRESS)),
+                (Bytes::from(EETH_ADDRESS), Bytes::from(ETH_ADDRESS)),
+            ],
+            Venue::Wrapper(_) => vec![
+                (Bytes::from(EETH_ADDRESS), Bytes::from(WEETH_ADDRESS)),
+                (Bytes::from(WEETH_ADDRESS), Bytes::from(EETH_ADDRESS)),
+            ],
+        }
+    }
+
     fn every_token_pair() -> Vec<(Bytes, Bytes)> {
         let tokens = [ETH_ADDRESS, EETH_ADDRESS, WEETH_ADDRESS];
         let mut pairs = Vec::new();
@@ -1685,11 +1789,16 @@ mod tests {
     /// return exactly the reported output.
     #[test]
     fn every_reported_limit_quotes_at_its_own_size() {
-        for state in [pool_state_with_liquidity(), wrapper_state()] {
-            for (sell, buy) in every_token_pair() {
-                let Ok((max_in, max_out)) = state.get_limits(sell.clone(), buy.clone()) else {
-                    continue;
-                };
+        for state in [
+            pool_state_with_liquidity(),
+            pool_state_bound_by_the_burn_bucket(),
+            pool_state_bound_by_the_redemption_bucket(),
+            wrapper_state(),
+        ] {
+            for (sell, buy) in supported_pairs(&state) {
+                let (max_in, max_out) = state
+                    .get_limits(sell.clone(), buy.clone())
+                    .unwrap_or_else(|e| panic!("{sell:x} -> {buy:x} has no limit: {e:?}"));
                 if max_in == BigUint::ZERO {
                     assert_eq!(
                         max_out,
