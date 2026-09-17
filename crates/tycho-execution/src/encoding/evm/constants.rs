@@ -126,9 +126,7 @@ pub static NON_PLE_ENCODED_PROTOCOLS: LazyLock<HashSet<&'static str>> = LazyLock
     set
 });
 
-/// Uniswap V2 and its forks encode identically, so they share `UniswapV2SwapEncoder`. The fallback
-/// encoder accepts the same names as aliases for its `UniswapV2` protocol; the
-/// `test_aliases_cover_registry_forks` test keeps the two lists from drifting.
+/// Uniswap V2 and its forks encode identically, so they share `UniswapV2SwapEncoder`.
 pub const UNISWAP_V2_FORKS: &[&str] =
     &["uniswap_v2", "sushiswap_v2", "pancakeswap_v2", "quickswap_v2"];
 

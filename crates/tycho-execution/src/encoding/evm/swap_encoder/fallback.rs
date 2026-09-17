@@ -24,19 +24,17 @@ const MAX_UNISWAP_V2_FEE_BPS: u8 = 30;
 /// protocol's JSON fields are the variant fields below. The variants mirror
 /// `TychoFallbackRouter.FallbackProtocol`.
 ///
-/// Uniswap V2 and V3 fork names are also accepted: `sushiswap_v2`, `pancakeswap_v2`, `quickswap_v2`
-/// map to Uniswap V2, and `pancakeswap_v3`, `sushiswap_v3`, `robinswap_v3` to Uniswap V3, mirroring
-/// the fork groups the registry routes to the shared encoder (`UNISWAP_V2_FORKS`/`UNISWAP_V3_FORKS`
-/// in `constants.rs`). `test_aliases_cover_registry_forks` fails if the two ever drift.
+/// Fork names alias the variant they encode like. Only forks deployed on Ethereum are listed,
+/// since this encoder runs nowhere else.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "fallback_protocol", rename_all = "snake_case")]
 enum FallbackProtocol {
-    #[serde(alias = "sushiswap_v2", alias = "pancakeswap_v2", alias = "quickswap_v2")]
+    #[serde(alias = "sushiswap_v2", alias = "pancakeswap_v2")]
     UniswapV2 {
         pair: Bytes,
         fee_bps: u8,
     },
-    #[serde(alias = "pancakeswap_v3", alias = "sushiswap_v3", alias = "robinswap_v3")]
+    #[serde(alias = "pancakeswap_v3")]
     UniswapV3 {
         pool: Bytes,
     },
@@ -239,10 +237,7 @@ mod tests {
     use tycho_common::models::protocol::ProtocolComponent;
 
     use super::*;
-    use crate::encoding::{
-        evm::constants::{UNISWAP_V2_FORKS, UNISWAP_V3_FORKS},
-        models::default_token,
-    };
+    use crate::encoding::models::default_token;
 
     // The addresses below match the Fallback.t.sol fixtures so that test can reuse them.
     const PAMM: &str = "1111111111111111111111111111111111111111";
@@ -344,27 +339,6 @@ mod tests {
 
         // Byte 01 = UniswapV3.
         assert_eq!(hex_swap, format!("{USDC}{WETH}{PAMM}01{USDC_WETH_USV3}"));
-    }
-
-    /// Every Uniswap V2/V3 fork name the registry routes to the shared encoder must also
-    /// deserialize into the matching `FallbackProtocol` variant, so the serde aliases never drift
-    /// from the registry's fork groups.
-    #[test]
-    fn test_aliases_cover_registry_forks() {
-        for name in UNISWAP_V2_FORKS {
-            let protocol: FallbackProtocol = serde_json::from_str(&format!(
-                r#"{{"fallback_protocol":"{name}","pair":"0x{PAMM}","fee_bps":30}}"#
-            ))
-            .unwrap_or_else(|e| panic!("V2 fork {name} does not deserialize: {e}"));
-            assert_eq!(protocol.protocol_byte(), 0, "{name} must map to the UniswapV2 variant");
-        }
-        for name in UNISWAP_V3_FORKS {
-            let protocol: FallbackProtocol = serde_json::from_str(&format!(
-                r#"{{"fallback_protocol":"{name}","pool":"0x{PAMM}"}}"#
-            ))
-            .unwrap_or_else(|e| panic!("V3 fork {name} does not deserialize: {e}"));
-            assert_eq!(protocol.protocol_byte(), 1, "{name} must map to the UniswapV3 variant");
-        }
     }
 
     #[test]
