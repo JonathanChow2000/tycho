@@ -158,10 +158,15 @@ fn get_new_pairs(
             // are self-contained proxies. Flag them so simulation resolves their transfers locally
             // rather than binding them to an implementation another VM protocol indexed for the
             // same token.
-            .with_attributes(&[(
-                "self_contained_tokens",
-                json_serialize_address_list(&[token0.to_vec(), token1.to_vec()]),
-            )])
+            .with_attributes(&[
+                (
+                    "self_contained_tokens",
+                    json_serialize_address_list(&[token0.to_vec(), token1.to_vec()]),
+                ),
+                // The generic `PropAMMExecutor` serves every venue implementing `IPropAMM`, so the
+                // venue address travels in the swap data rather than being an executor immutable.
+                ("pamm_address", config.router_address.clone()),
+            ])
             .as_swap_type("tempest_pair", ImplementationType::Vm);
 
         // No `paused` attribute at creation: `addPair` is itself the activation, and an absent

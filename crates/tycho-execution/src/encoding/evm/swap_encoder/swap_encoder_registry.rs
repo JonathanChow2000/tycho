@@ -19,7 +19,7 @@ use crate::encoding::{
             lunarbase::LunarBaseSwapEncoder, maverick_v2::MaverickV2SwapEncoder,
             metric::MetricSwapEncoder, native_wrap::WrapSwapEncoder, propamm::PropAMMSwapEncoder,
             ring_swap_v2::RingSwapV2SwapEncoder, rocketpool::RocketpoolSwapEncoder,
-            sky::SkySwapEncoder, slipstreams::SlipstreamsSwapEncoder, tempest::TempestSwapEncoder,
+            sky::SkySwapEncoder, slipstreams::SlipstreamsSwapEncoder,
             uniswap_v2::UniswapV2SwapEncoder, uniswap_v3::UniswapV3SwapEncoder,
             uniswap_v4::UniswapV4SwapEncoder,
         },
@@ -191,9 +191,6 @@ impl SwapEncoderRegistry {
             "vm:liquidityparty" => {
                 Ok(Box::new(LiquidityPartySwapEncoder::new(executor_address, self.chain, config)?))
             }
-            "vm:tempest" => {
-                Ok(Box::new(TempestSwapEncoder::new(executor_address, self.chain, config)?))
-            }
             "aerodrome_slipstreams" => {
                 Ok(Box::new(SlipstreamsSwapEncoder::new(executor_address, self.chain, config)?))
             }
@@ -242,7 +239,10 @@ impl SwapEncoderRegistry {
             pls if pls == PRICE_LEVEL_STREAM_KEY ||
                 pls.starts_with(PRICE_LEVEL_STREAM_PREFIX) ||
                 pls == PROPAMM_FALLBACK_KEY ||
-                pls.starts_with(PROPAMM_FALLBACK_PREFIX) =>
+                pls.starts_with(PROPAMM_FALLBACK_PREFIX) ||
+                // Tempest implements `IPropAMM`, so the generic executor serves it; the venue
+                // address comes from the component's `pamm_address` attribute.
+                pls == "vm:tempest" =>
             {
                 Ok(Box::new(PropAMMSwapEncoder::new(executor_address, self.chain, config)?))
             }

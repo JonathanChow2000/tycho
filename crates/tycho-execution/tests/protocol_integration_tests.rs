@@ -1860,6 +1860,12 @@ fn test_single_encoding_strategy_tempest_weth_usdc() {
         ProtocolComponent {
             id: String::from("0x6b7d03b47715d0315ccb75d25300c242e26b51f5202e1a32df20f239e1d9de35"),
             protocol_system: String::from("vm:tempest"),
+            // Tempest is served by the generic PropAMMExecutor, which reads the venue address
+            // from this attribute rather than an executor immutable.
+            static_attributes: HashMap::from([(
+                "pamm_address".to_string(),
+                Bytes::from_str("00000003f1ec2379e79f58e12ec6c4f51ee92149").unwrap(),
+            )]),
             ..Default::default()
         },
         default_token(token_in.clone()),
