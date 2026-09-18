@@ -145,9 +145,8 @@ contract TempestAdapter is ISwapAdapter {
         // The search treats every `quoteExactOut` revert as "size too large".
         // That holds because the venue reverts `InsufficientLiquidity` above
         // the committed ladder and above what the vault can pay, and returns a
-        // price
-        // for any size below it -- it has no minimum-size revert. A venue that
-        // gained one would collapse this search toward zero.
+        // price for any size below it -- it has no minimum-size revert. A venue
+        // that gained one would collapse this search toward zero.
         uint256 lo = 0;
         for (uint256 i = 0; i < LIMIT_SEARCH_ITERATIONS; i++) {
             uint256 mid = lo + (hi - lo) / 2;
