@@ -45,6 +45,7 @@ Entry (e.g. splitSwap)
 | `Dispatcher.sol`               | Executor dispatch. 1-day timelock on new executors. Balance-diff verification of swap outputs. Queries transfer data via staticcall, executes swaps via delegatecall                                                                                           |
 | `TransferManager.sol`          | Caps transferFrom to the declared input amount. `_transferOut` for output transfers (handles FoT/rebasing tokens via balance-diff). 6 transfer scenarios depending on context                                                                                  |
 | `FeeCalculator.sol`            | Dual fee system: router fee on output + router fee on client fee. Per-client custom rates. Upgradeable without redeploying router                                                                                                                              |
+| `fallback/TychoFallbackRouter.sol` | Standalone contract (not an executor, never delegatecalled). Holds `tokenIn` for one leg, runs a pAMM, and on failure runs the caller's chosen fallback protocol. See "Protocol fallback" below. |
 | `uniswap_x/UniswapXFiller.sol` | Filler contract for UniswapX V2DutchOrder Reactor. Wraps TychoRouterV3: receives an order via `reactorCallback`, approves TychoRouterV3 to pull input tokens, calls TychoRouterV3, then approves the reactor to pull output. Single-order only; AccessControl-gated. |
 
 Interfaces (`contracts/interfaces/`): `IExecutor` (swap [void],
@@ -100,6 +101,11 @@ Three fee layers, deducted from swap output:
 3. **Router fee on client fee** (stored): `_routerFeeOnClientFeeBps` -- Tycho's cut of the client fee (deducted from the
    client's portion, not from the user).
 
+**Fee receiver**: `FeeCalculator(routerFeeSetter, routerFeeReceiver)` takes the receiver as a constructor argument
+and emits `RouterFeeReceiverUpdated(address(0), routerFeeReceiver)` at deployment; `setRouterFeeReceiver` changes it
+later. It is explicit rather than defaulted to `msg.sender` because deployment goes through the CREATE2 factory
+(`0x4e59b448…`), which can never call `withdraw` on the router — fees credited to it are lost.
+
 **Per-client overrides**: Both router fees can be overridden per client address via `_customRouterFees`
 mapping (`CustomFees` struct, single storage slot). If set, the custom rate replaces the default for that client. Can be
 removed to revert to defaults.
@@ -114,7 +120,8 @@ queryable via RPC:
 - `MAX_BPS_SQUARED = 10_000_000_000_000_000` — `MAX_BPS²`; the combined denominator when both fees use the
   sub-BPS scale
 
-**Positive slippage** (`_positiveSlippageEnabled`, toggled via `setPositiveSlippageEnabled`): when enabled, the router
+**Positive slippage** (`_positiveSlippageEnabled`, enabled from the constructor — which emits
+`PositiveSlippageToggled(true)` — and toggled afterwards via `setPositiveSlippageEnabled`): when enabled, the router
 takes the entire surplus (`actualAmountOut - expectedAmountOut`) before fees, and the remaining fees compute on
 `expectedAmountOut`. When disabled, fees compute on `actualAmountOut` and the surplus stays in the swap output. The flag
 also forces `mustOutputThroughRouter` to return true, since slippage direction is unknown before the swap. Per-client
@@ -140,20 +147,102 @@ Supported: UniswapV2, UniswapV3, UniswapV4, BalancerV2, BalancerV3, Curve, Ekubo
 AerodromeV1, LiquidityParty, BopAMM, FermiSwap, LunarBase, RingSwapV2, Sky, Bebop (RFQ), Hashflow (RFQ),
 Liquorice (RFQ), Metric (RFQ), FluidV1, Rocketpool, ERC4626, Etherfi, NativeWrap (ETH↔WETH and other native wrappers),
 PropAMM (a single generic executor shared by all pAMMs implementing the standard `IPropAMM` interface; the pAMM
-address travels in the swap data) and PropAMMFallback (the same liquidity routed via Titan's PropAMMRouter).
+address travels in the swap data), PropAMMFallback (the same liquidity routed via Titan's PropAMMRouter), and
+Fallback (runs one leg through `TychoFallbackRouter` -- see "Protocol fallback").
+
+### Protocol fallback (`fallback/TychoFallbackRouter.sol`, `executors/FallbackExecutor.sol`)
+
+An executor cannot fall back on its own. The Dispatcher performs a leg's input transfer *before* it delegatecalls
+`swap()`, and `getTransferData()` fixes the transfer type per executor. A pAMM leg therefore has its tokens sitting at
+the pAMM by the time the pAMM reverts, and a Uniswap V3 retry -- which pays inside `uniswapV3SwapCallback` -- can no
+longer be funded.
+
+`TychoFallbackRouter` owns the tokens for the leg instead:
+
+```
+TychoRouterV3 --TransferType.Transfer--> TychoFallbackRouter --> pAMM     (reverts, rolled back)
+                                                             --> fallback (fills, pays receiver)
+```
+
+`FallbackExecutor` declares `TransferType.Transfer` with the fallback router as receiver and `outputToRouter = false`,
+then calls `TychoFallbackRouter.swap()`.
+
+**One pAMM and one caller-chosen fallback.** The pAMM runs inside `executePropAMM`, an external self-call
+wrapped in try/catch, so its transfer reverts with it and the fallback starts from the same balance. The fallback then
+runs in the outer frame: it gets no try/catch, so its revert is the swap's revert and there is no third attempt. The
+contract never picks a protocol itself -- the encoder decides which fallback to use and supplies its pool address.
+
+`FallbackSwap(pamm, tokenIn, tokenOut, amountIn, protocol)` is emitted when the pAMM fails and the fallback runs. A filled leg
+without it was served by the pAMM, so counting the event against filled legs gives the pAMM fill rate. The pAMM's
+revert reason is not carried: reading caller-controlled returndata of any size costs gas.
+
+A pAMM that reports success but delivers nothing reverts `TychoFallbackRouter__NoOutput`, so a silent fill still falls
+through to the fallback. The fallback slot measures nothing: the Dispatcher's balance-diff at the receiver is the
+single source of truth there, and a fallback that pays nothing fails the route-level `minAmountOut`.
+
+**The fallback can never be a pAMM.** A pAMM is the thing the pAMM slot exists to retry, so retrying it with another
+one defeats the purpose. This needs no runtime check: pAMM is not one of the enumerated fallback protocols.
+
+Swap encoding -- `FallbackExecutor` swap data is `[tokenIn: 20][tokenOut: 20][pamm: 20][fallback]`. The pAMM is a
+bare address, so no length prefix is needed to find where the fallback starts. The fallback is
+`[protocol: uint8][protocol data]`:
+
+| Protocol byte | Protocol | Protocol data |
+|---|---|---|
+| 0 | Uniswap V2 | `[pair: 20][feeBps: 1]`, `feeBps <= 30` |
+| 1 | Uniswap V3 | `[pool: 20]` |
+| 2 | Uniswap V4 | `[fee: 3][tickSpacing: 3][hook: 20][hookData: rest]` |
+| 3 | Curve | `[pool: 20][poolType: 1][i: 1][j: 1]` |
+| 4 | Fluid V1 | `[dex: 20][zero2one: 1]` |
+
+`feeBps` above 30 reverts `TychoFallbackRouter__InvalidUniswapV2Fee`. The fee is per-call here so that one
+protocol byte serves fee-divergent V2 forks; `UniswapV2Executor` takes the same number as a deploy-time immutable and needs one
+deployment per fork.
+
+The protocol data always occupies the tail of the swap data, so any protocol can be variable-length. Uniswap V4 is the only
+one that is today.
+
+Byte 1 (Uniswap V3) serves every V3-style fork, not just canonical Uniswap V3. A V3 pool pulls its input through a
+callback whose name it picks itself, and forks rename it (`pancakeV3SwapCallback`, `algebraSwapCallback`). The router
+answers all of them through a catch-all `fallback` -- the same selector-agnostic trick `TychoRouterV3.fallback` uses --
+guarded by the transient callback context so only the pool the swap called can be paid. So the solver may map any V3
+fork to byte 1.
+
+Swap direction for Uniswap V2/V3/V4 comes from the sort order of `tokenIn` and `tokenOut`, so it is not encoded. Fluid's
+`zero2one` is the dex's own token order, which is not the address sort order, so it is. A `zero2one` that contradicts
+the leg reverts either `TychoFallbackRouter__CallbackTokenMismatch`, when the dex asks `dexCallback` for the other
+token, or `FluidDexError`, when the dex prices `amountIn` against the other side's reserves first.
+
+Constraints:
+
+- **Native ETH is not supported.** Routes use the wrapped token; `TychoRouterEncoder` already inserts the WETH wrap and
+  unwrap legs around a swap that needs them.
+- **Fee-on-transfer and rebasing tokens are not supported.** This contract transfers to the protocol itself, and that
+  hop is outside the Dispatcher's balance-diff, so each protocol is told more than it receives.
+- **Every protocol gets `minAmountOut = 0`.** A binding per-protocol value would revert the routes the fallback exists
+  to rescue. The TychoRouter's route-level `minAmountOut` is the price check, so the caller must set it low enough for
+  the fallback to clear.
+- **Uniswap V4 routes are single-pool.** A route names one pool, never a path.
+- `scripts/deploy-fallback-router.js` deploys the contract through the CREATE2 factory. It reads `poolManager` and
+  `fluidLiquidity` from `config/executor_deployments.json` (`uniswap_v4` and `fluid_v1`), so a network missing either
+  entry fails there. Deployed on Ethereum only.
+- The contract holds no funds between transactions. A balance that does end up here (Curve rounding dust, a mistaken
+  transfer) is claimable by anyone through the permissionless `swap` and is considered lost. A Curve exchange leaves its
+  approval in place; the same reasoning covers it, since there is nothing here to take.
 
 ### Executor Flow, Callbacks & Output Verification
 
 **Balance-diff verification**: The Dispatcher independently verifies every swap output. It
 measures `balanceOf(measureAt, tokenOut)` before and after every `swap()` delegatecall. The measured diff becomes the
 single source of truth for fees, delta accounting, and sequential chaining. This eliminates trust in protocol-reported
-amounts and handles fee-on-transfer/rebasing tokens universally.
+amounts and handles fee-on-transfer/rebasing tokens for every executor the Dispatcher pays directly. `FallbackExecutor`
+is the exception: `TychoFallbackRouter` transfers to the protocol itself, outside this measurement.
 
 **Two output categories** (via `outputToRouter` flag from `getTransferData()`):
 
 | Category                   | Executors                                                                                                                                       | `outputToRouter` | Behavior                                                                                         |
 |----------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------|------------------|--------------------------------------------------------------------------------------------------|
-| **Direct-to-receiver**     | UniswapV2, UniswapV3, UniswapV4, BalancerV2, BalancerV3, Ekubo, EkuboV3, Slipstreams, MaverickV2, AerodromeV1, LiquidityParty, ERC4626, FluidV1, BopAMM, FermiSwap, LunarBase, RingSwapV2, Sky, Metric | `false`          | Dispatcher measures balance at receiver                                                          |
+| **Direct-to-receiver**     | UniswapV2, UniswapV3, UniswapV4, BalancerV2, BalancerV3, Ekubo, EkuboV3, Slipstreams, MaverickV2, AerodromeV1, LiquidityParty, ERC4626, FluidV1, BopAMM, FermiSwap, LunarBase, RingSwapV2, Sky, Metric, Fallback | `false`          | Dispatcher measures balance at receiver                                                          |
 | **Output-lands-at-router** | Curve, NativeWrap, Rocketpool, Etherfi, Bebop, Hashflow, Liquorice                                                                              | `true`           | Dispatcher measures at `address(this)`, then forwards via `_transferOut()` if receiver != router |
 
 **Two input categories**:
@@ -237,7 +326,11 @@ group is PLE-encoded (`[len: u16][data]...`); Ekubo uses concatenation instead (
 **Parallel encoding**: `encode_swap_groups` (`strategy_encoders.rs`) and `TychoRouterEncoder::encode_solutions`
 spawn threads via `map_on_threads` (`evm/utils.rs`) **only when an encoder in the batch blocks on a quote** —
 `SwapEncoder::blocks_on_quote()` defaults to `false` and is `true` only for the RFQ encoders (Bebop, Hashflow,
-Liquorice, Metric). Otherwise encoding runs serially on the calling thread. Input order is preserved either way.
+Liquorice, Metric). Otherwise encoding runs serially on the calling thread. Input order is preserved
+either way. Hashflow quotes stay independent under this parallelism because the Hashflow RFQ client
+(tycho-simulation) sends a fresh random effectiveTrader with every quote request: Hashflow scopes its strictly
+increasing quote nonces per effective trader, so quotes with unique addresses never invalidate each other. The
+cost is a cold nonce storage slot on Hashflow's router (~17k extra gas per swap).
 
 **Swap grouping** (`evm/group_swaps.rs`): Consecutive swaps on the same groupable protocol
 (`GROUPABLE_PROTOCOLS` in `evm/constants.rs`: `uniswap_v4`, `uniswap_v4_hooks`, `vm:balancer_v3`,
@@ -254,17 +347,26 @@ flags) into packed bytes. Each encoder holds its executor address.
 from `config/executor_addresses.json`. Protocol name prefixes: `vm:` (simulation-backed,
 e.g. `vm:balancer_v2`, `vm:curve`), `rfq:` (request-for-quote, e.g. `rfq:bebop`), bare (on-chain,
 e.g. `uniswap_v2`, `fluid_v1`), and `pricelevelstream:` (Titan pAMM price level stream, suffixed
-with the venue name or, for auto-detected pAMMs, the venue address). Price-level-stream protocols
+with the protocol name or, for auto-detected pAMMs, the protocol address). Price-level-stream protocols
 resolve generically: a single `pricelevelstream` config entry serves the whole family via a
 `get_encoder` fallback (shared generic `PropAMMSwapEncoder`/`PropAMMExecutor`), with exact
-`pricelevelstream:{venue}` entries overriding per venue.
+`pricelevelstream:{protocol}` entries overriding per protocol.
 
-`propammfallback:{venue}` is the same liquidity executed through Titan's PropAMMRouter
-(`0x4DdF368080CD7946db5b459aD591c350158175e1`, hardcoded in the executor) instead of the venue
+`propammfallback:{protocol}` is the same liquidity executed through Titan's PropAMMRouter
+(`0x4DdF368080CD7946db5b459aD591c350158175e1`, hardcoded in the executor) instead of the protocol
 directly, so a stale maker quote falls back to a single-hop Uniswap V3 pool rather than reverting
 the route. It resolves the same
-way (family key `propammfallback`, shared `PropAMMSwapEncoder`, `PropAMMFallbackExecutor`). Only venues
+way (family key `propammfallback`, shared `PropAMMSwapEncoder`, `PropAMMFallbackExecutor`). Only protocols
 whitelisted on the PropAMMRouter may use the prefix.
+
+`fallback:{protocol}` is the same liquidity executed through `TychoFallbackRouter` (see "protocol
+fallback" above), which replaces the PropAMMRouter path: any pAMM qualifies, and the solver picks
+the fallback protocol per swap instead of the router owning one Uniswap V3 mapping. It resolves the
+same way (family key `fallback`, `FallbackSwapEncoder`, `FallbackExecutor`). The fallback protocol —
+one of Uniswap V2/V3/V4, Curve, or Fluid V1 with its pool parameters — travels as JSON in the
+swap's `user_data` and is required; the pAMM address comes from the component's `pamm_address`
+static attribute. No `fallback` entry ships in the executor configs until the FallbackExecutor is
+deployed.
 
 ### Angstrom attestations (`evm/swap_encoder/angstrom.rs`)
 
@@ -350,10 +452,15 @@ forge fmt                       # auto-format
 forge snapshot                  # gas snapshots
 ```
 
-Config: `contracts/foundry.toml` -- Cancun EVM, optimizer 200 runs (default) / 1000 runs (production), via_ir enabled.
+Config: `contracts/foundry.toml` -- Osaka EVM, optimizer 200 runs (default) / 1000 runs (production), via_ir enabled.
 Line length 80.
 
 Tests fork Ethereum mainnet via `RPC_URL` and Base via `BASE_RPC_URL` env vars.
+
+Contract changes can alter the deployed runtime bytecode used by `protocol-testing`. From the
+repository root, run `./protocols/testing/scripts/update_runtime_bytecode.sh` and commit any changed
+`protocols/testing/fixtures/*.runtime.json`; CI runs the same script with `--check`. Foundry pins
+the compiler and omits the metadata hash to keep these fixtures reproducible.
 
 ### Rust
 
@@ -393,6 +500,8 @@ Features: `evm` (default, enables alloy + reqwest), `fork-tests` (mainnet fork t
    and `Executor::VARIANTS`, then implement `get_transfer_data`, `swap`, and `funds_expected_address` (plus
    `get_callback_transfer_data` and `handle_callback` for callback protocols), mirroring the Solidity executor.
    Only these caller-controlled executors are modeled — they carry the highest risk and are easiest to model.
+9. Regenerate and commit runtime-bytecode fixtures with
+   `./protocols/testing/scripts/update_runtime_bytecode.sh`.
 
 ## Security
 
