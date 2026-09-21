@@ -254,9 +254,7 @@ Constraints:
 - `scripts/deploy-fallback-router.js` deploys the contract through the CREATE2 factory, reading `poolManager` and
   `fluidLiquidity` from the chain's `uniswap_v4` and `fluid_v1` entries in `config/executor_deployments.json` and the
   static quoter from `fallback_router.uniswap_v3_static_quoter` in `config/protocol_specific_addresses.json`, zeroing
-  whichever is missing. It refuses to deploy when `config/fallback_protocols.json` disagrees: a chain that lists
-  Uniswap V4 or Fluid V1 must have the singleton, and a chain with the singleton must list the protocol. The
-  `FallbackExecutor` then goes through `deploy-executors.js` like any executor: add a
+  whichever is missing. The `FallbackExecutor` then goes through `deploy-executors.js` like any executor: add a
   `fallback` entry with the printed router address to `executor_deployments.json` and list `fallback` under the
   chain. Not deployed anywhere yet.
 - The contract holds no funds between transactions. A balance that does end up here (Curve rounding dust, a mistaken
@@ -399,26 +397,25 @@ same way (family key `fallback`, `FallbackSwapEncoder`, `FallbackExecutor`). The
 one of Uniswap V2/V3/V4, Curve, Fluid V1 or Aerodrome V1 with its pool parameters — travels as JSON in the
 swap's `user_data` and is required; the pAMM address comes from the component's `pamm_address`
 static attribute. The public `FallbackProtocol` enum (`swap_encoder::FallbackProtocol`) is the
-list other projects import: `all()` yields every protocol in protocol-byte order,
-`from_protocol_system` maps a Tycho protocol name to the variant it
+list other projects import: `from_protocol_system` maps a Tycho protocol name to the variant it
 encodes as (`UNISWAP_V2_FORKS`, `UNISWAP_V3_FORKS` and the Slipstreams deployments resolve to
-their base variant, `vm:curve` to Curve), `supported(chain)` and `supported_on(chain)` say which
-protocols the chain's `TychoFallbackRouter` runs, and `user_data_name` is the tag to write. The
+their base variant, `vm:curve` to Curve), `supported_on(chain)` says whether the chain's
+`TychoFallbackRouter` runs it, and `user_data_name` is the tag to write. The
 encoder rejects a protocol the chain's router does not run with an `InvalidInput` error instead
 of letting it revert on chain.
 
-`config/fallback_protocols.json` lists the fallback protocols per chain, and `supported_on` reads
-it. A chain lists a protocol when its router has the protocol's singleton (Uniswap V4, Fluid V1)
-and `executor_addresses.json` has an executor for it there. A chain missing from the file has no
-router and supports nothing. `deploy-fallback-router.js` refuses to deploy a router that
-disagrees with the file. Only Ethereum and Base are listed today.
+`SUPPORTED_PROTOCOLS` in `fallback.rs` lists the fallback protocols per chain, and `supported_on`
+reads it. A chain lists a protocol when its router has the protocol's singleton (Uniswap V4, Fluid
+V1) and `executor_addresses.json` has an executor for it there; tests check both against the
+executor configs. A chain missing from the list has no router and supports nothing. Only Ethereum
+and Base are listed today.
 
 `FallbackProtocol` is `#[repr(u8)]`, so the discriminant is the protocol byte, and `strum` derives
 its snake-case variant name as the `user_data` tag, which the `FallbackSwapData` variant of the same
 name deserializes. `forks()` lists the fork protocol systems that map to each variant. Adding a
 fallback protocol means adding the variant, its `forks` arm, the `FallbackSwapData` variant with
-the fields the contract decodes, that variant's arm in `FallbackSwapData::encode`, and the
-protocol's name under each chain in `fallback_protocols.json`. The encoder builds on any
+the fields the contract decodes, that variant's arm in `FallbackSwapData::encode`, and its chains
+in `SUPPORTED_PROTOCOLS`. The encoder builds on any
 chain and takes no config. A Uniswap V4 fallback must name the zero hook and no hook data; hooked
 pools are not supported yet. No `fallback` entry ships in the executor configs until the
 FallbackExecutor is deployed.

@@ -13,8 +13,6 @@ pub(crate) const DEFAULT_EXECUTORS_JSON: &str =
 pub(crate) const DEFAULT_ROUTERS_JSON: &str = include_str!("../../../config/router_addresses.json");
 pub(crate) const PROTOCOL_SPECIFIC_CONFIG: &str =
     include_str!("../../../config/protocol_specific_addresses.json");
-pub(crate) const FALLBACK_PROTOCOLS_JSON: &str =
-    include_str!("../../../config/fallback_protocols.json");
 
 /// Default router addresses keyed by chain, parsed from `config/router_addresses.json`.
 pub static DEFAULT_ROUTER_ADDRESSES: LazyLock<HashMap<Chain, Bytes>> = LazyLock::new(|| {
