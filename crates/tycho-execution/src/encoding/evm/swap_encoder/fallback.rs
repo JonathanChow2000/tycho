@@ -1,7 +1,9 @@
-use std::{collections::HashMap, sync::LazyLock};
+use std::{collections::HashMap, str::FromStr, sync::LazyLock};
 
 use alloy::sol_types::SolValue;
 use serde::Deserialize;
+use strum::IntoEnumIterator;
+use strum_macros::{EnumIter, EnumString, IntoStaticStr};
 use tycho_common::{models::Chain, Bytes};
 
 use crate::encoding::{
@@ -23,8 +25,14 @@ const PAMM_ADDRESS_ATTRIBUTE: &str = "pamm_address";
 const MAX_UNISWAP_V2_FEE_BPS: u8 = 30;
 
 /// A protocol `TychoFallbackRouter` can fall back on. Mirrors the contract's `FallbackProtocol`
-/// enum; the discriminant is the protocol byte.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// enum: the discriminant is the protocol byte, and the snake-case variant name is the
+/// `fallback_protocol` tag in `user_data` and the [`FallbackSwapData`] variant name.
+///
+/// To add a protocol: add the variant last, matching the contract enum; its [`forks`](Self::forks)
+/// arm; the [`FallbackSwapData`] variant of the same name; its [`FallbackSwapData::encode`] arm;
+/// and list it per chain in `config/fallback_protocols.json`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumIter, EnumString, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 #[repr(u8)]
 pub enum FallbackProtocol {
     UniswapV2,
@@ -33,64 +41,6 @@ pub enum FallbackProtocol {
     Curve,
     FluidV1,
     AerodromeV1,
-}
-
-/// The names of one fallback protocol.
-struct FallbackProtocolInfo {
-    protocol: FallbackProtocol,
-    /// The `fallback_protocol` tag in `user_data`. Must equal the snake-case name of the
-    /// protocol's [`FallbackSwapData`] variant.
-    user_data_name: &'static str,
-    /// Forks that map to this protocol.
-    forks: &'static [&'static [&'static str]],
-}
-
-/// One row per [`FallbackProtocol`], in protocol-byte order.
-///
-/// To add a protocol:
-/// 1. Add the [`FallbackProtocol`] variant, matching the contract enum.
-/// 2. Add its row here.
-/// 3. Add the [`FallbackSwapData`] variant with the fields the contract decodes.
-/// 4. Add its arm in [`FallbackSwapData::encode`].
-/// 5. List it per chain in `config/fallback_protocols.json`.
-static PROTOCOLS: &[FallbackProtocolInfo] = &[
-    FallbackProtocolInfo {
-        protocol: FallbackProtocol::UniswapV2,
-        user_data_name: "uniswap_v2",
-        forks: &[UNISWAP_V2_FORKS],
-    },
-    FallbackProtocolInfo {
-        protocol: FallbackProtocol::UniswapV3,
-        user_data_name: "uniswap_v3",
-        // Slipstream pools use Uniswap V3's `swap` and callback.
-        forks: &[UNISWAP_V3_FORKS, SLIPSTREAMS_FORKS],
-    },
-    FallbackProtocolInfo {
-        protocol: FallbackProtocol::UniswapV4,
-        user_data_name: "uniswap_v4",
-        forks: &[],
-    },
-    FallbackProtocolInfo { protocol: FallbackProtocol::Curve, user_data_name: "curve", forks: &[] },
-    FallbackProtocolInfo {
-        protocol: FallbackProtocol::FluidV1,
-        user_data_name: "fluid_v1",
-        forks: &[],
-    },
-    FallbackProtocolInfo {
-        protocol: FallbackProtocol::AerodromeV1,
-        user_data_name: "aerodrome_v1",
-        forks: &[],
-    },
-];
-
-impl FallbackProtocolInfo {
-    /// Whether `protocol_system` maps to this protocol.
-    fn matches(&self, protocol_system: &str) -> bool {
-        protocol_system == self.user_data_name ||
-            self.forks
-                .iter()
-                .any(|forks| forks.contains(&protocol_system))
-    }
 }
 
 /// The protocols each chain's `TychoFallbackRouter` runs, from `config/fallback_protocols.json`.
@@ -117,9 +67,7 @@ static SUPPORTED_PROTOCOLS: LazyLock<HashMap<Chain, Vec<FallbackProtocol>>> = La
 impl FallbackProtocol {
     /// Every protocol, in protocol-byte order.
     pub fn all() -> impl Iterator<Item = Self> {
-        PROTOCOLS
-            .iter()
-            .map(|info| info.protocol)
+        Self::iter()
     }
 
     /// The protocol byte: the ordinal of the contract's `FallbackProtocol` variant.
@@ -127,14 +75,22 @@ impl FallbackProtocol {
         self as u8
     }
 
-    fn info(self) -> &'static FallbackProtocolInfo {
-        // `PROTOCOLS` is in protocol-byte order.
-        &PROTOCOLS[self.protocol_byte() as usize]
-    }
-
     /// The `fallback_protocol` tag naming this protocol in `user_data`.
     pub fn user_data_name(self) -> &'static str {
-        self.info().user_data_name
+        self.into()
+    }
+
+    /// Forks that map to this protocol.
+    fn forks(self) -> &'static [&'static [&'static str]] {
+        match self {
+            FallbackProtocol::UniswapV2 => &[UNISWAP_V2_FORKS],
+            // Slipstream pools use Uniswap V3's `swap` and callback.
+            FallbackProtocol::UniswapV3 => &[UNISWAP_V3_FORKS, SLIPSTREAMS_FORKS],
+            FallbackProtocol::UniswapV4 |
+            FallbackProtocol::Curve |
+            FallbackProtocol::FluidV1 |
+            FallbackProtocol::AerodromeV1 => &[],
+        }
     }
 
     /// The protocol a Tycho `protocol_system` or `user_data` tag maps to. A `vm:` prefix is
@@ -143,10 +99,15 @@ impl FallbackProtocol {
         let name = protocol_system
             .strip_prefix("vm:")
             .unwrap_or(protocol_system);
-        PROTOCOLS
-            .iter()
-            .find(|info| info.matches(name))
-            .map(|info| info.protocol)
+        if let Ok(protocol) = Self::from_str(name) {
+            return Some(protocol);
+        }
+        Self::all().find(|protocol| {
+            protocol
+                .forks()
+                .iter()
+                .any(|forks| forks.contains(&name))
+        })
     }
 
     /// Whether `chain`'s `TychoFallbackRouter` runs this protocol, per
@@ -515,14 +476,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(hex_swap, format!("{USDC}{WETH}{PAMM}03{pool}010002"));
-    }
-
-    /// `info` indexes `PROTOCOLS` by protocol byte.
-    #[test]
-    fn test_protocols_are_in_protocol_byte_order() {
-        for (byte, info) in PROTOCOLS.iter().enumerate() {
-            assert_eq!(usize::from(info.protocol.protocol_byte()), byte, "{:?}", info.protocol);
-        }
     }
 
     #[test]

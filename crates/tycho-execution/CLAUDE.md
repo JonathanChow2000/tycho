@@ -413,13 +413,12 @@ and `executor_addresses.json` has an executor for it there. A chain missing from
 router and supports nothing. `deploy-fallback-router.js` refuses to deploy a router that
 disagrees with the file. Only Ethereum and Base are listed today.
 
-The `PROTOCOLS` table in `fallback.rs` holds one row per protocol -- its `user_data_name` and the
-fork lists that resolve to it -- and `from_protocol_system` and
-`user_data_name` read that table, so adding a fallback protocol means adding a row, a
-`FallbackSwapData` variant with the fields the contract decodes, that variant's arm in
-`FallbackSwapData::encode`, and the protocol's name under each chain in
-`fallback_protocols.json`. The row's index is the protocol byte, matching the contract enum.
-`FallbackProtocol` is `#[repr(u8)]` so the discriminant is that byte. The encoder builds on any
+`FallbackProtocol` is `#[repr(u8)]`, so the discriminant is the protocol byte, and `strum` derives
+its snake-case variant name as the `user_data` tag, which the `FallbackSwapData` variant of the same
+name deserializes. `forks()` lists the fork protocol systems that map to each variant. Adding a
+fallback protocol means adding the variant, its `forks` arm, the `FallbackSwapData` variant with
+the fields the contract decodes, that variant's arm in `FallbackSwapData::encode`, and the
+protocol's name under each chain in `fallback_protocols.json`. The encoder builds on any
 chain and takes no config. A Uniswap V4 fallback must name the zero hook and no hook data; hooked
 pools are not supported yet. No `fallback` entry ships in the executor configs until the
 FallbackExecutor is deployed.
