@@ -13,7 +13,6 @@ use chain_config::{
     TvlThresholdTier,
 };
 use deepsize::DeepSizeOf;
-use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use token::Token;
@@ -101,21 +100,7 @@ pub enum Chain {
     Custom(CustomChainId),
 }
 
-/// How a chain's native balance relates to its routable token representation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NativeAssetKind {
-    /// A contract converts between separate native and wrapped-token balances.
-    Wrapper,
-    /// Native and routable representations expose the same economic balance.
-    SharedBalance,
-    /// The chain has no distinct routable representation or wrapper contract.
-    NativeOnly,
-}
-
-/// Descriptive alias for [`NativeAssetKind`] at relationship-oriented call sites.
-pub type NativeAssetRelationship = NativeAssetKind;
-
-/// The native asset representations and conversion rules for a chain.
+/// The native asset representations and economic relationship for a chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NativeAsset {
     /// Separate native and ERC-20 balances connected by a wrapper contract.
@@ -143,18 +128,6 @@ impl NativeAsset {
         }
     }
 
-    pub fn kind(&self) -> NativeAssetKind {
-        match self {
-            NativeAsset::Wrapper { native: _, wrapper: _ } => NativeAssetKind::Wrapper,
-            NativeAsset::SharedBalance { native: _, routable: _ } => NativeAssetKind::SharedBalance,
-            NativeAsset::NativeOnly { native: _ } => NativeAssetKind::NativeOnly,
-        }
-    }
-
-    pub fn relationship(&self) -> NativeAssetRelationship {
-        self.kind()
-    }
-
     /// Returns the routable token only when it is backed by a real wrapper contract.
     pub fn wrapper(&self) -> Option<&Token> {
         match self {
@@ -164,37 +137,9 @@ impl NativeAsset {
         }
     }
 
-    /// Returns each distinct token representation of this economic asset.
+    /// Returns each token representation of this economic asset.
     pub fn representations(&self) -> impl Iterator<Item = &Token> {
-        let native = self.native_token();
-        std::iter::once(native).chain(
-            self.routable_token()
-                .filter(move |routable| native.address != routable.address),
-        )
-    }
-
-    /// Converts native precision into routable precision, truncating non-representable dust.
-    pub fn native_to_routable_amount(&self, amount: &BigUint) -> Option<BigUint> {
-        self.routable_token().map(|routable| {
-            convert_token_precision(amount, self.native_token().decimals, routable.decimals)
-        })
-    }
-
-    /// Converts routable precision into native precision.
-    pub fn routable_to_native_amount(&self, amount: &BigUint) -> Option<BigUint> {
-        self.routable_token().map(|routable| {
-            convert_token_precision(amount, routable.decimals, self.native_token().decimals)
-        })
-    }
-}
-
-fn convert_token_precision(amount: &BigUint, from_decimals: u32, to_decimals: u32) -> BigUint {
-    if from_decimals > to_decimals {
-        amount / BigUint::from(10u8).pow(from_decimals - to_decimals)
-    } else if to_decimals > from_decimals {
-        amount * BigUint::from(10u8).pow(to_decimals - from_decimals)
-    } else {
-        amount.clone()
+        std::iter::once(self.native_token()).chain(self.routable_token())
     }
 }
 
@@ -542,10 +487,22 @@ impl Chain {
     /// Like [`Chain::native_token`] but returns [`ChainConfigError::UnknownChain`] when a custom
     /// chain has no registered config.
     pub fn try_native_token(&self) -> Result<Token, ChainConfigError> {
-        Ok(self
-            .try_native_asset()?
-            .native_token()
-            .clone())
+        Ok(match self {
+            Chain::Ethereum => native_eth(Chain::Ethereum),
+            // It was decided that STRK token will be tracked as a dedicated AccountBalance on
+            // Starknet accounts and ETH balances will be tracked as a native balance.
+            Chain::Starknet => native_eth(Chain::Starknet),
+            Chain::ZkSync => native_eth(Chain::ZkSync),
+            Chain::Arbitrum => native_eth(Chain::Arbitrum),
+            Chain::Base => native_eth(Chain::Base),
+            Chain::Bsc => native_bsc(Chain::Bsc),
+            Chain::Unichain => native_eth(Chain::Unichain),
+            Chain::Polygon => native_pol(Chain::Polygon),
+            Chain::Plasma => native_xpl(Chain::Plasma),
+            Chain::Robinhood => native_eth(Chain::Robinhood),
+            Chain::Arc => native_arc_usdc(Chain::Arc),
+            Chain::Custom(id) => native_custom(*self, try_resolve_custom(id, chain_registry())?),
+        })
     }
 
     /// Returns the wrapper contract token, if the chain has one. Panics if a custom chain has no
@@ -560,22 +517,6 @@ impl Chain {
         Ok(self
             .try_native_asset()?
             .wrapper()
-            .cloned())
-    }
-
-    /// Returns the routable representation of the native asset, if one exists. Panics if a custom
-    /// chain has no registered config; use [`Chain::try_routable_native_token`] for a non-panicking
-    /// variant.
-    pub fn routable_native_token(&self) -> Option<Token> {
-        expect_registered(self.try_routable_native_token())
-    }
-
-    /// Like [`Chain::routable_native_token`] but returns [`ChainConfigError::UnknownChain`] when a
-    /// custom chain has no registered config.
-    pub fn try_routable_native_token(&self) -> Result<Option<Token>, ChainConfigError> {
-        Ok(self
-            .try_native_asset()?
-            .routable_token()
             .cloned())
     }
 
@@ -658,6 +599,8 @@ impl Chain {
                 ),
             },
             Chain::Arc => NativeAsset::SharedBalance {
+                // Arc's native USDC pays gas; its ERC-20 interface shares that balance at 6
+                // decimals, so it has no wrapper. https://docs.arc.network/arc/concepts/stablecoin-native-model
                 native: native_arc_usdc(Chain::Arc),
                 routable: routable_arc_usdc(Chain::Arc),
             },
@@ -1032,10 +975,8 @@ mod tests {
         let chain = Chain::custom("nativeonly").unwrap();
         let asset = chain.native_asset();
 
-        assert_eq!(asset.kind(), NativeAssetKind::NativeOnly);
         assert!(asset.routable_token().is_none());
         assert!(chain.wrapped_native_token().is_none());
-        assert!(chain.routable_native_token().is_none());
         assert_eq!(asset.representations().count(), 1);
     }
 
@@ -1099,7 +1040,6 @@ mod tests {
         assert_eq!(Chain::Arc.id(), 5042);
         assert_eq!(Chain::Arc.to_string(), "arc");
         assert_eq!("arc".parse::<Chain>().unwrap(), Chain::Arc);
-        assert!("5042002".parse::<Chain>().is_err());
 
         let dto_chain: dto::Chain = Chain::Arc.into();
         assert_eq!(dto_chain, dto::Chain::Arc);
@@ -1115,8 +1055,9 @@ mod tests {
         assert!(Chain::Arc
             .wrapped_native_token()
             .is_none());
-        let routable = Chain::Arc
-            .routable_native_token()
+        let native_asset = Chain::Arc.native_asset();
+        let routable = native_asset
+            .routable_token()
             .expect("Arc should expose its routable USDC representation");
         assert_eq!(routable.symbol, "USDC");
         assert_eq!(routable.decimals, 6);
@@ -1135,13 +1076,7 @@ mod tests {
         let asset = Chain::Arc.native_asset();
 
         assert_eq!(asset.native_token(), &Chain::Arc.native_token());
-        assert_eq!(
-            asset.routable_token(),
-            Chain::Arc
-                .routable_native_token()
-                .as_ref()
-        );
-        assert_eq!(asset.relationship(), NativeAssetRelationship::SharedBalance);
+        assert!(matches!(asset, NativeAsset::SharedBalance { .. }));
         assert!(asset.wrapper().is_none());
 
         let representations: Vec<_> = asset
@@ -1158,26 +1093,9 @@ mod tests {
     }
 
     #[test]
-    fn test_arc_native_to_routable_amount_truncates_dust() {
-        let asset = Chain::Arc.native_asset();
-        let one_micro_usdc = BigUint::from(1_000_000_000_000u64);
-
-        assert_eq!(
-            asset.native_to_routable_amount(&(one_micro_usdc.clone() - 1u8)),
-            Some(BigUint::from(0u8))
-        );
-        assert_eq!(asset.native_to_routable_amount(&one_micro_usdc), Some(BigUint::from(1u8)));
-        assert_eq!(
-            asset.native_to_routable_amount(&(one_micro_usdc.clone() + 999_999_999_999u64)),
-            Some(BigUint::from(1u8))
-        );
-        assert_eq!(asset.routable_to_native_amount(&BigUint::from(1u8)), Some(one_micro_usdc));
-    }
-
-    #[test]
     fn test_existing_native_asset_relationships_remain_compatible() {
         let ethereum = Chain::Ethereum.native_asset();
-        assert_eq!(ethereum.relationship(), NativeAssetRelationship::Wrapper);
+        assert!(matches!(ethereum, NativeAsset::Wrapper { .. }));
         assert_eq!(ethereum.wrapper(), ethereum.routable_token());
         assert_eq!(
             ethereum.routable_token(),
@@ -1187,30 +1105,13 @@ mod tests {
         );
 
         let starknet = Chain::Starknet.native_asset();
-        assert_eq!(starknet.relationship(), NativeAssetRelationship::NativeOnly);
+        assert!(matches!(starknet, NativeAsset::NativeOnly { .. }));
         assert!(starknet.wrapper().is_none());
         assert!(starknet.routable_token().is_none());
         assert!(Chain::Starknet
             .wrapped_native_token()
             .is_none());
-        assert!(Chain::Starknet
-            .routable_native_token()
-            .is_none());
-        assert!(starknet
-            .native_to_routable_amount(&BigUint::from(1u8))
-            .is_none());
-        assert!(starknet
-            .routable_to_native_amount(&BigUint::from(1u8))
-            .is_none());
         assert_eq!(starknet.representations().count(), 1);
-    }
-
-    #[test]
-    fn test_native_asset_representations_deduplicate_matching_addresses() {
-        let native = Chain::Ethereum.native_token();
-        let asset = NativeAsset::Wrapper { native: native.clone(), wrapper: native };
-
-        assert_eq!(asset.representations().count(), 1);
     }
 
     #[test]

@@ -1592,9 +1592,6 @@ mod tests_ensure_chain {
         let mut routable_address = vec![0u8; 20];
         routable_address[0] = 0x36;
         assert_eq!(rows, vec![(vec![0u8; 20], 18, 1e18), (routable_address, 6, 1e6)]);
-        for (_, decimals, atomic_price) in rows {
-            assert_eq!(atomic_price / 10.0_f64.powi(decimals), 1.0);
-        }
     }
 
     #[tokio::test]

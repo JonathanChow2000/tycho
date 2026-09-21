@@ -96,7 +96,9 @@ impl Cli {
         if self.buy_token.is_none() {
             let buy_token = self
                 .chain
-                .routable_native_token()
+                .native_asset()
+                .routable_token()
+                .cloned()
                 .unwrap_or_else(|| self.chain.native_token());
             self.buy_token = Some(buy_token.address.to_string());
         }
