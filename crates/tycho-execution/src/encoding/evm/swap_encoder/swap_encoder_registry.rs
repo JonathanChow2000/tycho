@@ -17,13 +17,14 @@ use crate::encoding::{
             erc_4626::ERC4626SwapEncoder, etherfi::EtherfiSwapEncoder,
             fallback::FallbackSwapEncoder, fermiswap::FermiSwapEncoder,
             fluid_v1::FluidV1SwapEncoder, hashflow::HashflowSwapEncoder,
-            liquidity_party::LiquidityPartySwapEncoder, liquorice::LiquoriceSwapEncoder,
-            lunarbase::LunarBaseSwapEncoder, maverick_v2::MaverickV2SwapEncoder,
-            metric::MetricSwapEncoder, native::NativeSwapEncoder, native_wrap::WrapSwapEncoder,
-            propamm::PropAMMSwapEncoder, ring_swap_v2::RingSwapV2SwapEncoder,
-            rocketpool::RocketpoolSwapEncoder, sky::SkySwapEncoder,
-            slipstreams::SlipstreamsSwapEncoder, uniswap_v2::UniswapV2SwapEncoder,
-            uniswap_v3::UniswapV3SwapEncoder, uniswap_v4::UniswapV4SwapEncoder,
+            lido_v4::LidoV4SwapEncoder, liquidity_party::LiquidityPartySwapEncoder,
+            liquorice::LiquoriceSwapEncoder, lunarbase::LunarBaseSwapEncoder,
+            maverick_v2::MaverickV2SwapEncoder, metric::MetricSwapEncoder,
+            native::NativeSwapEncoder, native_wrap::WrapSwapEncoder, propamm::PropAMMSwapEncoder,
+            ring_swap_v2::RingSwapV2SwapEncoder, rocketpool::RocketpoolSwapEncoder,
+            sky::SkySwapEncoder, slipstreams::SlipstreamsSwapEncoder,
+            uniswap_v2::UniswapV2SwapEncoder, uniswap_v3::UniswapV3SwapEncoder,
+            uniswap_v4::UniswapV4SwapEncoder,
         },
     },
     swap_encoder::SwapEncoder,
@@ -257,6 +258,9 @@ impl SwapEncoderRegistry {
                 pls.starts_with(PROPAMM_FALLBACK_PREFIX) =>
             {
                 Ok(Box::new(PropAMMSwapEncoder::new(executor_address, self.chain, config)?))
+            }
+            "lido_v4" => {
+                Ok(Box::new(LidoV4SwapEncoder::new(executor_address, self.chain, config)?))
             }
             // The TychoFallbackRouter path carries the fallback protocol in the swap data, so it
             // needs its own encoder; the family resolves like the price-level-stream one.
