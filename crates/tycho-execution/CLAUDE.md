@@ -416,7 +416,7 @@ file has no router and supports nothing. `deploy-fallback-router.js` refuses to 
 that disagrees with the file.
 
 The `PROTOCOLS` table in `fallback.rs` holds one row per protocol -- its `user_data_name` and the
-protocol systems and fork lists that resolve to it -- and `from_protocol_system` and
+fork lists that resolve to it -- and `from_protocol_system` and
 `user_data_name` read that table, so adding a fallback protocol means adding a row, a
 `FallbackSwapData` variant with the fields the contract decodes, that variant's arm in
 `FallbackSwapData::encode`, and the protocol's name under each chain in

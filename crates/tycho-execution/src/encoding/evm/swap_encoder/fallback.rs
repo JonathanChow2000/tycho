@@ -41,8 +41,8 @@ struct FallbackProtocolInfo {
     /// The `fallback_protocol` tag in `user_data`. Must equal the snake-case name of the
     /// protocol's [`FallbackSwapData`] variant.
     user_data_name: &'static str,
-    /// Other Tycho `protocol_system` names that map to this protocol.
-    protocol_systems: &'static [&'static [&'static str]],
+    /// Forks that map to this protocol.
+    forks: &'static [&'static [&'static str]],
 }
 
 /// One row per [`FallbackProtocol`], in protocol-byte order.
@@ -57,33 +57,29 @@ static PROTOCOLS: &[FallbackProtocolInfo] = &[
     FallbackProtocolInfo {
         protocol: FallbackProtocol::UniswapV2,
         user_data_name: "uniswap_v2",
-        protocol_systems: &[UNISWAP_V2_FORKS],
+        forks: &[UNISWAP_V2_FORKS],
     },
     FallbackProtocolInfo {
         protocol: FallbackProtocol::UniswapV3,
         user_data_name: "uniswap_v3",
         // Slipstream pools use Uniswap V3's `swap` and callback.
-        protocol_systems: &[UNISWAP_V3_FORKS, SLIPSTREAMS_FORKS],
+        forks: &[UNISWAP_V3_FORKS, SLIPSTREAMS_FORKS],
     },
     FallbackProtocolInfo {
         protocol: FallbackProtocol::UniswapV4,
         user_data_name: "uniswap_v4",
-        protocol_systems: &[],
+        forks: &[],
     },
-    FallbackProtocolInfo {
-        protocol: FallbackProtocol::Curve,
-        user_data_name: "curve",
-        protocol_systems: &[&["vm:curve"]],
-    },
+    FallbackProtocolInfo { protocol: FallbackProtocol::Curve, user_data_name: "curve", forks: &[] },
     FallbackProtocolInfo {
         protocol: FallbackProtocol::FluidV1,
         user_data_name: "fluid_v1",
-        protocol_systems: &[],
+        forks: &[],
     },
     FallbackProtocolInfo {
         protocol: FallbackProtocol::AerodromeV1,
         user_data_name: "aerodrome_v1",
-        protocol_systems: &[],
+        forks: &[],
     },
 ];
 
@@ -91,9 +87,9 @@ impl FallbackProtocolInfo {
     /// Whether `protocol_system` maps to this protocol.
     fn matches(&self, protocol_system: &str) -> bool {
         protocol_system == self.user_data_name ||
-            self.protocol_systems
+            self.forks
                 .iter()
-                .any(|names| names.contains(&protocol_system))
+                .any(|forks| forks.contains(&protocol_system))
     }
 }
 
@@ -141,11 +137,15 @@ impl FallbackProtocol {
         self.info().user_data_name
     }
 
-    /// The protocol a Tycho `protocol_system` or `user_data` tag maps to.
+    /// The protocol a Tycho `protocol_system` or `user_data` tag maps to. A `vm:` prefix is
+    /// ignored: `vm:curve` is Curve.
     pub fn from_protocol_system(protocol_system: &str) -> Option<Self> {
+        let name = protocol_system
+            .strip_prefix("vm:")
+            .unwrap_or(protocol_system);
         PROTOCOLS
             .iter()
-            .find(|info| info.matches(protocol_system))
+            .find(|info| info.matches(name))
             .map(|info| info.protocol)
     }
 
