@@ -66,12 +66,22 @@ impl SubstreamsStream {
     }
 }
 
-static DEFAULT_BACKOFF: Lazy<ExponentialBackoff> =
-    Lazy::new(|| ExponentialBackoff::from_millis(500).max_delay(Duration::from_secs(45)));
+/// Delay ladder between reconnection attempts: 200ms, 400ms, 800ms, 1.6s, 3.2s, 6.4s, 12.8s,
+/// 25.6s, then 30s for every further attempt.
+///
+/// [`ExponentialBackoff`] raises its base to the n-th power, so `from_millis(n)` alone jumps
+/// straight from `n` to `n²` milliseconds. Building the ladder from a base of 2 and a factor of
+/// 100 keeps the doubling that the cap implies, which a base of 500 does not: that yields 500ms
+/// followed by 250s, and every attempt after the first therefore waits the whole `max_delay`.
+static DEFAULT_BACKOFF: Lazy<ExponentialBackoff> = Lazy::new(|| {
+    ExponentialBackoff::from_millis(2)
+        .factor(100)
+        .max_delay(Duration::from_secs(30))
+});
 
 /// Consecutive `Unauthenticated` retries allowed once the endpoint has proven the credential by
 /// delivering a block. With `DEFAULT_BACKOFF` these span about three minutes.
-const MAX_UNAUTHENTICATED_RETRIES: u32 = 5;
+const MAX_UNAUTHENTICATED_RETRIES: u32 = 13;
 
 /// Whether an `Unauthenticated` status from the endpoint should be retried.
 ///
@@ -84,11 +94,25 @@ fn should_retry_unauthenticated(block_received: bool, retries_used: u32) -> bool
     block_received && retries_used < MAX_UNAUTHENTICATED_RETRIES
 }
 
+/// Waits out the next backoff step before reconnecting.
+///
+/// The first attempt after a healthy stream does not wait. Nearly every disconnect here is a
+/// transport drop the endpoint is already able to serve again, and consumers see the whole delay
+/// as a hole in the block feed, so a sleep before the attempt most likely to succeed only widens
+/// that hole. `retry_immediately` is set again whenever a block arrives, so the exemption is
+/// spent once per disconnect and a genuinely unavailable endpoint still falls back to the ladder.
 async fn wait_for_next_retry(
     backoff: &mut ExponentialBackoff,
     retry_count: &mut u32,
+    retry_immediately: &mut bool,
     extractor_id: &str,
 ) -> Result<(), Error> {
+    if std::mem::take(retry_immediately) {
+        info!("Reconnecting immediately");
+        *retry_count += 1;
+        return Ok(());
+    }
+
     if let Some(duration) = backoff.next() {
         info!("Will try to reconnect after {:?}", duration);
         sleep(duration).await;
@@ -123,6 +147,7 @@ fn stream_blocks(
     let mut latest_block = start_block_num as u64;
     let mut retry_count = 0;
     let mut backoff = DEFAULT_BACKOFF.clone();
+    let mut retry_immediately = true;
     let mut block_received = false;
     let mut unauthenticated_retries = 0;
 
@@ -178,6 +203,7 @@ fn stream_blocks(
 
                                 // Reset backoff because we got a good value from the stream
                                 backoff = DEFAULT_BACKOFF.clone();
+                                retry_immediately = true;
 
                                 // The endpoint accepted the credential, so any later rejection of
                                 // it is the endpoint's problem, not a misconfiguration.
@@ -192,6 +218,7 @@ fn stream_blocks(
                             BlockProcessedResult::BlockUndoSignal(block_undo_signal) => {
                                 // Reset backoff because we got a good value from the stream
                                 backoff = DEFAULT_BACKOFF.clone();
+                                retry_immediately = true;
 
                                 let to_block = block_undo_signal.last_valid_block.clone().unwrap_or_default().number;
                                 counter!(
@@ -220,7 +247,13 @@ fn stream_blocks(
 
                                     unauthenticated_retries += 1;
                                     warn!(unauthenticated_retries, "Endpoint rejected a proven credential, reconnecting");
-                                    wait_for_next_retry(&mut backoff, &mut retry_count, &extractor_id).await?;
+                                    wait_for_next_retry(
+                                        &mut backoff,
+                                        &mut retry_count,
+                                        &mut retry_immediately,
+                                        &extractor_id,
+                                    )
+                                    .await?;
                                     continue 'retry_loop;
                                 }
 
@@ -228,7 +261,13 @@ fn stream_blocks(
                                 counter!("substreams_failure", "extractor" => extractor_id.clone(), "cause" => status.code().to_string()).increment(1);
 
                                 // If we reach this point, we must wait a bit before retrying
-                                wait_for_next_retry(&mut backoff, &mut retry_count, &extractor_id).await?;
+                                wait_for_next_retry(
+                                    &mut backoff,
+                                    &mut retry_count,
+                                    &mut retry_immediately,
+                                    &extractor_id,
+                                )
+                                .await?;
                                 continue 'retry_loop;
                             },
                         }
@@ -262,7 +301,13 @@ fn stream_blocks(
                     error!("Unable to connect to endpoint: {:#}", e);
 
                     // If we reach this point, we must wait a bit before retrying
-                    wait_for_next_retry(&mut backoff, &mut retry_count, &extractor_id).await?;
+                    wait_for_next_retry(
+                        &mut backoff,
+                        &mut retry_count,
+                        &mut retry_immediately,
+                        &extractor_id,
+                    )
+                    .await?;
                 }
             }
         }
@@ -446,5 +491,77 @@ mod tests {
     fn test_unauthenticated_retries_are_bounded() {
         assert!(should_retry_unauthenticated(true, MAX_UNAUTHENTICATED_RETRIES - 1));
         assert!(!should_retry_unauthenticated(true, MAX_UNAUTHENTICATED_RETRIES));
+    }
+
+    #[test]
+    fn test_backoff_ladder_doubles_up_to_the_cap() {
+        let steps: Vec<Duration> = DEFAULT_BACKOFF
+            .clone()
+            .take(10)
+            .collect();
+
+        assert_eq!(
+            steps,
+            vec![
+                Duration::from_millis(200),
+                Duration::from_millis(400),
+                Duration::from_millis(800),
+                Duration::from_millis(1_600),
+                Duration::from_millis(3_200),
+                Duration::from_millis(6_400),
+                Duration::from_millis(12_800),
+                Duration::from_millis(25_600),
+                Duration::from_secs(30),
+                Duration::from_secs(30),
+            ]
+        );
+    }
+
+    /// A single missed reconnect used to cost the whole cap, which is longer than the window a
+    /// consumer waits before it treats the feed as broken.
+    #[test]
+    fn test_second_reconnect_does_not_jump_to_the_cap() {
+        let mut backoff = DEFAULT_BACKOFF.clone();
+        backoff.next().expect("first step");
+        let second = backoff.next().expect("second step");
+
+        assert!(
+            second <= Duration::from_secs(1),
+            "the second attempt waits {second:?}, long enough for consumers to give up"
+        );
+    }
+
+    #[test]
+    fn test_unauthenticated_retries_still_span_about_three_minutes() {
+        let total: Duration = DEFAULT_BACKOFF
+            .clone()
+            .take(MAX_UNAUTHENTICATED_RETRIES as usize)
+            .sum();
+
+        assert!(
+            (Duration::from_secs(150)..=Duration::from_secs(210)).contains(&total),
+            "the documented ~3 minute window is now {total:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_first_reconnect_after_a_block_does_not_wait() {
+        let mut backoff = DEFAULT_BACKOFF.clone();
+        let mut retry_count = 0;
+        let mut retry_immediately = true;
+
+        let start = std::time::Instant::now();
+        wait_for_next_retry(&mut backoff, &mut retry_count, &mut retry_immediately, "test")
+            .await
+            .expect("the first retry should be allowed");
+
+        assert!(start.elapsed() < Duration::from_millis(100), "the first retry slept");
+        assert_eq!(retry_count, 1);
+        assert!(!retry_immediately, "the exemption should be spent");
+        assert_eq!(
+            backoff.next(),
+            Some(Duration::from_millis(200)),
+            "an immediate retry must not consume a step of the ladder"
+        );
     }
 }
