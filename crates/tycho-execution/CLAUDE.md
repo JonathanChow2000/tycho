@@ -53,7 +53,7 @@ getTransferData [returns transferType, receiver, tokenIn, tokenOut, outputToRout
 fundsExpectedAddress), `ICallback` (handleCallback, verifyCallback, getCallbackTransferData), `IFeeCalculator` (
 calculateFee [takes FeeInput → FeeRecipient[]], mustOutputThroughRouter [takes clientFeeBps, client → bool],
 getAllClientFees [takes start, count → (address[] clients, CustomFees[] fees)]). Also
-`IPropAMM` / `IPropAMMRouter` (the pAMM standard and Titan's fallback router) and `IUniversalRouter`.
+`IPropAMM` (the pAMM standard) and `IUniversalRouter`.
 
 ### Vault (`Vault.sol`)
 
@@ -147,8 +147,8 @@ Supported: UniswapV2, UniswapV3, UniswapV4, BalancerV2, BalancerV3, Curve, Ekubo
 AerodromeV1, LiquidityParty, BopAMM, FermiSwap, LunarBase, RingSwapV2, Sky, Bebop (RFQ), Hashflow (RFQ),
 Liquorice (RFQ), Metric (RFQ), FluidV1, Rocketpool, ERC4626, Etherfi, NativeWrap (ETH↔WETH and other native wrappers),
 PropAMM (a single generic executor shared by all pAMMs implementing the standard `IPropAMM` interface; the pAMM
-address travels in the swap data), PropAMMFallback (the same liquidity routed via Titan's PropAMMRouter), and
-Fallback (runs one leg through `TychoFallbackRouter` -- see "Protocol fallback").
+address travels in the swap data), and Fallback (runs one leg through `TychoFallbackRouter` -- see "Protocol
+fallback").
 
 ### Protocol fallback (`fallback/TychoFallbackRouter.sol`, `executors/FallbackExecutor.sol`)
 
@@ -385,17 +385,9 @@ resolve generically: a single `pricelevelstream` config entry serves the whole f
 `get_encoder` fallback (shared generic `PropAMMSwapEncoder`/`PropAMMExecutor`), with exact
 `pricelevelstream:{protocol}` entries overriding per protocol.
 
-`propammfallback:{protocol}` is the same liquidity executed through Titan's PropAMMRouter
-(`0x4DdF368080CD7946db5b459aD591c350158175e1`, hardcoded in the executor) instead of the protocol
-directly, so a stale maker quote falls back to a single-hop Uniswap V3 pool rather than reverting
-the route. It resolves the same
-way (family key `propammfallback`, shared `PropAMMSwapEncoder`, `PropAMMFallbackExecutor`). Only protocols
-whitelisted on the PropAMMRouter may use the prefix.
-
 `fallback:{protocol}` is the same liquidity executed through `TychoFallbackRouter` (see "protocol
-fallback" above), which replaces the PropAMMRouter path: any pAMM qualifies, and the solver picks
-the fallback protocol per swap instead of the router owning one Uniswap V3 mapping. It resolves the
-same way (family key `fallback`, `FallbackSwapEncoder`, `FallbackExecutor`). The fallback protocol —
+fallback" above): any pAMM qualifies, and the solver picks the fallback protocol per swap. It
+resolves the same way (family key `fallback`, `FallbackSwapEncoder`, `FallbackExecutor`). The fallback protocol —
 one of Uniswap V2/V3/V4, Curve, Fluid V1 or Aerodrome V1 with its pool parameters — travels as JSON in the
 swap's `user_data` and is required; the pAMM address comes from the component's `pamm_address`
 static attribute. The public `FallbackProtocol` enum (`swap_encoder::FallbackProtocol`) is the
