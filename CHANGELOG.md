@@ -1,3 +1,11 @@
+## [0.413.0](https://github.com/propeller-heads/tycho/compare/0.412.0...0.413.0) (2026-09-21)
+
+
+### Features
+
+* **tycho-client:** configure subscription buffer size ([e6063e2](https://github.com/propeller-heads/tycho/commit/e6063e2379baa1562d48d94343b78c65eb502a47))
+* **tycho-client:** configure subscription buffer size ([#1472](https://github.com/propeller-heads/tycho/issues/1472)) ([17ada9e](https://github.com/propeller-heads/tycho/commit/17ada9e351d6bbc5ce400299b73b0a5d78eec041))
+
 ## [0.412.0](https://github.com/propeller-heads/tycho/compare/0.411.0...0.412.0) (2026-09-21)
 
 
