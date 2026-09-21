@@ -407,13 +407,11 @@ protocols the chain's `TychoFallbackRouter` runs, and `user_data_name` is the ta
 encoder rejects a protocol the chain's router does not run with an `InvalidInput` error instead
 of letting it revert on chain.
 
-`config/fallback_protocols.json` lists the protocols each chain's router runs, and
-`supported_on` reads it. Uniswap V4 and Fluid V1 appear only on chains whose router was deployed
-with their singleton; every other protocol takes its pool from the swap and appears on every
-chain with a router -- Aerodrome V1 included even though its pools are on Base. Which chains have
-a protocol's pools is the component stream's answer, not the router's. A chain missing from the
-file has no router and supports nothing. `deploy-fallback-router.js` refuses to deploy a router
-that disagrees with the file.
+`config/fallback_protocols.json` lists the fallback protocols per chain, and `supported_on` reads
+it. A chain lists a protocol when its router has the protocol's singleton (Uniswap V4, Fluid V1)
+and `executor_addresses.json` has an executor for it there. A chain missing from the file has no
+router and supports nothing. `deploy-fallback-router.js` refuses to deploy a router that
+disagrees with the file. Only Ethereum and Base are listed today.
 
 The `PROTOCOLS` table in `fallback.rs` holds one row per protocol -- its `user_data_name` and the
 fork lists that resolve to it -- and `from_protocol_system` and

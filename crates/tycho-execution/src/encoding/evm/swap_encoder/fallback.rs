@@ -152,9 +152,8 @@ impl FallbackProtocol {
     /// Whether `chain`'s `TychoFallbackRouter` runs this protocol, per
     /// `config/fallback_protocols.json`.
     ///
-    /// Uniswap V4 and Fluid V1 need a per-chain singleton and are listed only where the router
-    /// has it. Every other protocol is addressed by pool and is listed on every chain with a
-    /// router, whether or not the chain has pools for it.
+    /// A chain lists a protocol when its router has what the protocol needs and Tycho has an
+    /// executor for it there.
     pub fn supported_on(self, chain: Chain) -> bool {
         SUPPORTED_PROTOCOLS
             .get(&chain)
@@ -399,7 +398,7 @@ mod tests {
     use tycho_common::models::protocol::ProtocolComponent;
 
     use super::*;
-    use crate::encoding::models::default_token;
+    use crate::encoding::{evm::constants::DEFAULT_EXECUTORS_JSON, models::default_token};
 
     // The addresses below match the Fallback.t.sol fixtures so that test can reuse them.
     const PAMM: &str = "1111111111111111111111111111111111111111";
@@ -572,23 +571,50 @@ mod tests {
         }
     }
 
-    /// Ethereum lists every protocol; Base has no Fluid; Plasma has no Uniswap V4; a chain
-    /// without a router lists nothing.
     #[test]
     fn test_supported_follows_fallback_protocols_config() {
         assert_eq!(
             FallbackProtocol::supported(Chain::Ethereum),
-            FallbackProtocol::all().collect::<Vec<_>>()
+            vec![
+                FallbackProtocol::UniswapV2,
+                FallbackProtocol::UniswapV3,
+                FallbackProtocol::UniswapV4,
+                FallbackProtocol::Curve,
+                FallbackProtocol::FluidV1,
+            ]
         );
-        assert!(!FallbackProtocol::FluidV1.supported_on(Chain::Base));
-        assert!(FallbackProtocol::UniswapV4.supported_on(Chain::Base));
-        assert!(!FallbackProtocol::UniswapV4.supported_on(Chain::Plasma));
-        assert!(FallbackProtocol::FluidV1.supported_on(Chain::Plasma));
-        assert!(FallbackProtocol::supported(Chain::ZkSync).is_empty());
-        // Pool-addressed protocols are listed on every chain with a router.
-        for chain in [Chain::Base, Chain::Plasma, Chain::Unichain] {
-            assert!(FallbackProtocol::UniswapV3.supported_on(chain), "{chain}");
-            assert!(FallbackProtocol::AerodromeV1.supported_on(chain), "{chain}");
+        assert_eq!(
+            FallbackProtocol::supported(Chain::Base),
+            vec![
+                FallbackProtocol::UniswapV2,
+                FallbackProtocol::UniswapV3,
+                FallbackProtocol::UniswapV4,
+                FallbackProtocol::AerodromeV1,
+            ]
+        );
+        // No router.
+        assert!(FallbackProtocol::supported(Chain::Plasma).is_empty());
+    }
+
+    /// A listed protocol has an executor on that chain, so Tycho indexes pools for it there.
+    #[test]
+    fn test_listed_protocols_have_executors() {
+        let executors: HashMap<Chain, HashMap<String, String>> =
+            serde_json::from_str(DEFAULT_EXECUTORS_JSON).unwrap();
+        for (chain, protocols) in SUPPORTED_PROTOCOLS.iter() {
+            let executors = executors
+                .get(chain)
+                .unwrap_or_else(|| panic!("{chain} has no executors"));
+            for protocol in protocols {
+                assert!(
+                    executors
+                        .keys()
+                        .any(|system| FallbackProtocol::from_protocol_system(system) ==
+                            Some(*protocol)),
+                    "{chain} lists {} in fallback_protocols.json but has no executor for it",
+                    protocol.user_data_name()
+                );
+            }
         }
     }
 
