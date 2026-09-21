@@ -397,14 +397,22 @@ same way (family key `fallback`, `FallbackSwapEncoder`, `FallbackExecutor`). The
 one of Uniswap V2/V3/V4, Curve, Fluid V1 or Aerodrome V1 with its pool parameters — travels as JSON in the
 swap's `user_data` and is required; the pAMM address comes from the component's `pamm_address`
 static attribute. The public `FallbackProtocol` enum (`swap_encoder::FallbackProtocol`) is the
-list other projects import: `from_protocol_system` maps a Tycho protocol name to the variant it
+list other projects import: `all()` yields every protocol in protocol-byte order,
+`from_protocol_system` maps a Tycho protocol name to the variant it
 encodes as (`UNISWAP_V2_FORKS`, `UNISWAP_V3_FORKS` and the Slipstreams deployments resolve to
 their base variant, `vm:curve` to Curve), `supported_on(chain)` says whether the chain's
 `TychoFallbackRouter` can run it, derived from `executor_addresses.json` -- Uniswap V4 and
 Fluid V1 need the chain to have that executor, since that is what the deploy script keys their
 singletons on -- and `user_data_name` is the tag to write. The encoder rejects a protocol the
 chain's deployment cannot run with an `InvalidInput` error instead of letting it revert on
-chain. The encoder builds on any chain; the `fallback` section of
+chain.
+
+The `PROTOCOLS` table in `fallback.rs` holds one row per protocol -- its `user_data_name`, the
+protocol systems and fork lists that resolve to it, and the executor its per-chain singleton comes
+from -- and the three methods above read that table, so adding a fallback protocol means adding a
+row, a `FallbackSwapData` variant with the fields the contract decodes, and that variant's arm in
+`FallbackSwapData::encode`. The row's index is the protocol byte, matching the contract enum.
+`FallbackProtocol` is `#[repr(u8)]` so the discriminant is that byte. The encoder builds on any chain; the `fallback` section of
 `protocol_specific_addresses.json` is optional and only carries the Angstrom hook to reject on
 chains that have one. No `fallback` entry ships in the executor configs until the
 FallbackExecutor is deployed.
