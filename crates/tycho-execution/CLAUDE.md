@@ -256,7 +256,9 @@ Constraints:
   static quoter from the script's own `STATIC_QUOTERS` map (Eden Network's deployments), zeroing whichever is
   missing. The `FallbackExecutor` then goes through `deploy-executors.js` like any executor: add a
   `fallback` entry with the printed router address to `executor_deployments.json` and list `fallback` under the
-  chain. Not deployed anywhere yet.
+  chain. Deployed on Ethereum (router `0xA4bC389e87011fED8e902166bF421A29Fa6ef633`, executor
+  `0x355d1D7bd40330c235e1132de8D2314b956584c9`) and Base (router `0xd38142E88f3d1011D8258737f257c709Dd0e2204`,
+  executor `0x08f22285d13533d68aA8bE5949536322DB3538De`).
 - The contract holds no funds between transactions. A balance that does end up here (Curve rounding dust, a mistaken
   transfer) is claimable by anyone through the permissionless `swap` and is considered lost. A Curve exchange leaves its
   approval in place; the same reasoning covers it, since there is nothing here to take.
@@ -417,8 +419,7 @@ fallback protocol means adding the variant, its `forks` arm, the `FallbackSwapDa
 the fields the contract decodes, that variant's arm in `FallbackSwapData::encode`, and its chains
 in `SUPPORTED_PROTOCOLS`. The encoder builds on any
 chain and takes no config. A Uniswap V4 fallback must name the zero hook and no hook data; hooked
-pools are not supported yet. No `fallback` entry ships in the executor configs until the
-FallbackExecutor is deployed.
+pools are not supported yet.
 
 ### Angstrom attestations (`evm/swap_encoder/angstrom.rs`)
 
