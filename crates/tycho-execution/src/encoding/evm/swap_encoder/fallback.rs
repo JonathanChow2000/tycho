@@ -419,11 +419,15 @@ mod tests {
         }
     }
 
-    fn encoder() -> FallbackSwapEncoder {
-        FallbackSwapEncoder::new(Bytes::default(), Chain::Ethereum, None).unwrap()
+    fn encoder(chain: Chain) -> FallbackSwapEncoder {
+        FallbackSwapEncoder::new(Bytes::default(), chain, None).unwrap()
     }
 
     fn encode_usdc_weth(user_data: Option<&str>) -> Result<String, EncodingError> {
+        encode_usdc_weth_on(Chain::Ethereum, user_data)
+    }
+
+    fn encode_usdc_weth_on(chain: Chain, user_data: Option<&str>) -> Result<String, EncodingError> {
         let token_in = Bytes::from(format!("0x{USDC}").as_str());
         let token_out = Bytes::from(format!("0x{WETH}").as_str());
         let mut swap = Swap::new(
@@ -441,7 +445,7 @@ mod tests {
             group_token_out: token_out,
         };
 
-        encoder()
+        encoder(chain)
             .encode_swap(&swap, &encoding_context)
             .map(|encoded| encode(&encoded))
     }
@@ -651,9 +655,10 @@ mod tests {
     #[test]
     fn test_encode_aerodrome_v1_fallback() {
         let pool = "5555555555555555555555555555555555555555";
-        let hex_swap = encode_usdc_weth(Some(&format!(
-            r#"{{"fallback_protocol":"aerodrome_v1","pool":"0x{pool}"}}"#
-        )))
+        let hex_swap = encode_usdc_weth_on(
+            Chain::Base,
+            Some(&format!(r#"{{"fallback_protocol":"aerodrome_v1","pool":"0x{pool}"}}"#)),
+        )
         .unwrap();
 
         assert_eq!(hex_swap, format!("{USDC}{WETH}{PAMM}05{pool}"));
@@ -808,7 +813,7 @@ mod tests {
             group_token_out: Bytes::from(format!("0x{WETH}").as_str()),
         };
 
-        let result = encoder().encode_swap(&swap, &encoding_context);
+        let result = encoder(Chain::Ethereum).encode_swap(&swap, &encoding_context);
         assert!(
             matches!(result, Err(EncodingError::FatalError(msg)) if msg.contains(PAMM_ADDRESS_ATTRIBUTE))
         );
