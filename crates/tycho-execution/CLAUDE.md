@@ -45,7 +45,7 @@ Entry (e.g. splitSwap)
 | `Dispatcher.sol`               | Executor dispatch. 1-day timelock on new executors. Balance-diff verification of swap outputs. Queries transfer data via staticcall, executes swaps via delegatecall                                                                                           |
 | `TransferManager.sol`          | Caps transferFrom to the declared input amount. `_transferOut` for output transfers (handles FoT/rebasing tokens via balance-diff). 6 transfer scenarios depending on context                                                                                  |
 | `FeeCalculator.sol`            | Dual fee system: router fee on output + router fee on client fee. Per-client custom rates. Upgradeable without redeploying router                                                                                                                              |
-| `fallback/TychoFallbackRouter.sol` | Standalone contract (not an executor, never delegatecalled). Holds `tokenIn` for one leg, runs a pAMM, and on failure runs the caller's chosen fallback protocol. See "Protocol fallback" below. |
+| `fallback/TychoFallbackRouter.sol` | Standalone contract (not an executor, never delegatecalled). Holds `tokenIn` for one leg, quotes a pAMM against the caller's chosen fallback protocol and runs whichever quotes more; a pAMM that wins the quote but fails still falls through. See "Protocol fallback" below. |
 | `uniswap_x/UniswapXFiller.sol` | Filler contract for UniswapX V2DutchOrder Reactor. Wraps TychoRouterV3: receives an order via `reactorCallback`, approves TychoRouterV3 to pull input tokens, calls TychoRouterV3, then approves the reactor to pull output. Single-order only; AccessControl-gated. |
 
 Interfaces (`contracts/interfaces/`): `IExecutor` (swap [void],
@@ -167,14 +167,30 @@ TychoRouterV3 --TransferType.Transfer--> TychoFallbackRouter --> pAMM     (rever
 `FallbackExecutor` declares `TransferType.Transfer` with the fallback router as receiver and `outputToRouter = false`,
 then calls `TychoFallbackRouter.swap()`.
 
-**One pAMM and one caller-chosen fallback.** The pAMM runs inside `executePropAMM`, an external self-call
-wrapped in try/catch, so its transfer reverts with it and the fallback starts from the same balance. The fallback then
-runs in the outer frame: it gets no try/catch, so its revert is the swap's revert and there is no third attempt. The
-contract never picks a protocol itself -- the encoder decides which fallback to use and supplies its pool address.
+**One pAMM and one caller-chosen fallback.** `swap` quotes both first and runs the fallback directly when it quotes
+more `tokenOut` than the pAMM. Otherwise the pAMM runs inside `executePropAMM`, an external self-call wrapped in
+try/catch, so its transfer reverts with it and the fallback starts from the same balance. The fallback then runs in
+the outer frame: it gets no try/catch, so its revert is the swap's revert and there is no third attempt. The contract
+never picks a protocol itself -- the encoder decides which fallback to use and supplies its pool address.
 
-`FallbackSwap(pamm, tokenIn, tokenOut, amountIn, protocol)` is emitted when the pAMM fails and the fallback runs. A filled leg
-without it was served by the pAMM, so counting the event against filled legs gives the pAMM fill rate. The pAMM's
-revert reason is not carried: reading caller-controlled returndata of any size costs gas.
+**Quotes.** The pAMM quote is `IPropAMM.quote`. The fallback quote depends on the protocol: Uniswap V2 is computed
+from the pair's reserves, Uniswap V3 asks the static quoter (Eden Network's `view` reimplementation of the tick walk,
+`uniswapV3StaticQuoter` immutable, `IUniswapV3StaticQuoter`), Curve asks `get_dy`, Fluid asks the dex to price a
+swap paid to `0xdEaD`, which reverts `FluidDexSwapResult(amountOut)` before moving any token. Uniswap V4 has no quote
+function, so `simulateUniswapV4` runs the real swap and reverts `TychoFallbackRouter__SimulatedAmountOut` with the
+receiver's balance diff, rolling it back. The pAMM quote is a low-level call whose return data counts only when it
+is at least 32 bytes; the fallback quote runs in the self-only external `quoteFallback` under try/catch. A fallback
+quote that reverts, returns nothing decodable or gets malformed protocol data counts as zero, and equal quotes keep
+the pAMM. A pAMM that quotes zero skips the fallback quote and its own swap, so the fallback runs straight away. The
+fallback quote costs gas on every other leg, including the ones the pAMM fills: about 107k for a Uniswap V4
+simulation, about 44k for Fluid, about 39k for Curve, about 31k for Uniswap V3, about 11k for Uniswap V2 (router
+call, cold state, mainnet fork).
+
+`FallbackSwap(pamm, tokenIn, tokenOut, amountIn, protocol, reason)` is emitted when the fallback runs. `reason` is
+`FallbackQuotedHigher` (the fallback quote beat the pAMM quote, a pAMM that cannot quote included) or
+`PropAMMFailed` (the pAMM won the quote, then reverted or delivered nothing). A filled leg without the event was
+served by the pAMM, so counting the event against filled legs gives the pAMM fill rate. The pAMM's revert reason is
+not carried: reading caller-controlled returndata of any size costs gas.
 
 A pAMM that reports success but delivers nothing reverts `TychoFallbackRouter__NoOutput`, so a silent fill still falls
 through to the fallback. The fallback slot measures nothing: the Dispatcher's balance-diff at the receiver is the
@@ -202,6 +218,12 @@ deployment per fork.
 The protocol data always occupies the tail of the swap data, so any protocol can be variable-length. Uniswap V4 is the only
 one that is today.
 
+Byte 1 (Uniswap V3) serves every V3-style fork, not just canonical Uniswap V3. A V3 pool pulls its input through a
+callback whose name it picks itself, and forks rename it (`pancakeV3SwapCallback`, `algebraSwapCallback`). The router
+answers all of them through a catch-all `fallback` -- the same selector-agnostic trick `TychoRouterV3.fallback` uses --
+guarded by the transient callback context so only the pool the swap called can be paid. So the solver may map any V3
+fork to byte 1.
+
 Swap direction for Uniswap V2/V3/V4 comes from the sort order of `tokenIn` and `tokenOut`, so it is not encoded. Fluid's
 `zero2one` is the dex's own token order, which is not the address sort order, so it is. A `zero2one` that contradicts
 the leg reverts either `TychoFallbackRouter__CallbackTokenMismatch`, when the dex asks `dexCallback` for the other
@@ -218,8 +240,9 @@ Constraints:
   the fallback to clear.
 - **Uniswap V4 routes are single-pool.** A route names one pool, never a path.
 - `scripts/deploy-fallback-router.js` deploys the contract through the CREATE2 factory. It reads `poolManager` and
-  `fluidLiquidity` from `config/executor_deployments.json` (`uniswap_v4` and `fluid_v1`), so a network missing either
-  entry fails there. Deployed on Ethereum only.
+  `fluidLiquidity` from `config/executor_deployments.json` (`uniswap_v4` and `fluid_v1`) and the Uniswap V3 static
+  quoter from `config/protocol_specific_addresses.json` (`fallback_router.uniswap_v3_static_quoter`), so a network
+  missing any of the three fails there. Deployed on Ethereum only.
 - The contract holds no funds between transactions. A balance that does end up here (Curve rounding dust, a mistaken
   transfer) is claimable by anyone through the permissionless `swap` and is considered lost. A Curve exchange leaves its
   approval in place; the same reasoning covers it, since there is nothing here to take.
@@ -320,7 +343,11 @@ group is PLE-encoded (`[len: u16][data]...`); Ekubo uses concatenation instead (
 **Parallel encoding**: `encode_swap_groups` (`strategy_encoders.rs`) and `TychoRouterEncoder::encode_solutions`
 spawn threads via `map_on_threads` (`evm/utils.rs`) **only when an encoder in the batch blocks on a quote** —
 `SwapEncoder::blocks_on_quote()` defaults to `false` and is `true` only for the RFQ encoders (Bebop, Hashflow,
-Liquorice, Metric). Otherwise encoding runs serially on the calling thread. Input order is preserved either way.
+Liquorice, Metric). Otherwise encoding runs serially on the calling thread. Input order is preserved
+either way. Hashflow quotes stay independent under this parallelism because the Hashflow RFQ client
+(tycho-simulation) sends a fresh random effectiveTrader with every quote request: Hashflow scopes its strictly
+increasing quote nonces per effective trader, so quotes with unique addresses never invalidate each other. The
+cost is a cold nonce storage slot on Hashflow's router (~17k extra gas per swap).
 
 **Swap grouping** (`evm/group_swaps.rs`): Consecutive swaps on the same groupable protocol
 (`GROUPABLE_PROTOCOLS` in `evm/constants.rs`: `uniswap_v4`, `uniswap_v4_hooks`, `vm:balancer_v3`,
@@ -337,17 +364,26 @@ flags) into packed bytes. Each encoder holds its executor address.
 from `config/executor_addresses.json`. Protocol name prefixes: `vm:` (simulation-backed,
 e.g. `vm:balancer_v2`, `vm:curve`), `rfq:` (request-for-quote, e.g. `rfq:bebop`), bare (on-chain,
 e.g. `uniswap_v2`, `fluid_v1`), and `pricelevelstream:` (Titan pAMM price level stream, suffixed
-with the venue name or, for auto-detected pAMMs, the venue address). Price-level-stream protocols
+with the protocol name or, for auto-detected pAMMs, the protocol address). Price-level-stream protocols
 resolve generically: a single `pricelevelstream` config entry serves the whole family via a
 `get_encoder` fallback (shared generic `PropAMMSwapEncoder`/`PropAMMExecutor`), with exact
-`pricelevelstream:{venue}` entries overriding per venue.
+`pricelevelstream:{protocol}` entries overriding per protocol.
 
-`propammfallback:{venue}` is the same liquidity executed through Titan's PropAMMRouter
-(`0x4DdF368080CD7946db5b459aD591c350158175e1`, hardcoded in the executor) instead of the venue
+`propammfallback:{protocol}` is the same liquidity executed through Titan's PropAMMRouter
+(`0x4DdF368080CD7946db5b459aD591c350158175e1`, hardcoded in the executor) instead of the protocol
 directly, so a stale maker quote falls back to a single-hop Uniswap V3 pool rather than reverting
 the route. It resolves the same
-way (family key `propammfallback`, shared `PropAMMSwapEncoder`, `PropAMMFallbackExecutor`). Only venues
+way (family key `propammfallback`, shared `PropAMMSwapEncoder`, `PropAMMFallbackExecutor`). Only protocols
 whitelisted on the PropAMMRouter may use the prefix.
+
+`fallback:{protocol}` is the same liquidity executed through `TychoFallbackRouter` (see "protocol
+fallback" above), which replaces the PropAMMRouter path: any pAMM qualifies, and the solver picks
+the fallback protocol per swap instead of the router owning one Uniswap V3 mapping. It resolves the
+same way (family key `fallback`, `FallbackSwapEncoder`, `FallbackExecutor`). The fallback protocol —
+one of Uniswap V2/V3/V4, Curve, or Fluid V1 with its pool parameters — travels as JSON in the
+swap's `user_data` and is required; the pAMM address comes from the component's `pamm_address`
+static attribute. No `fallback` entry ships in the executor configs until the FallbackExecutor is
+deployed.
 
 ### Angstrom attestations (`evm/swap_encoder/angstrom.rs`)
 

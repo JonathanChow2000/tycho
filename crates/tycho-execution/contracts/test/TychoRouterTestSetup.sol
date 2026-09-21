@@ -21,6 +21,7 @@ import {
 } from "../src/executors/PropAMMFallbackExecutor.sol";
 import {FallbackExecutor} from "../src/executors/FallbackExecutor.sol";
 import {TychoFallbackRouter} from "../src/fallback/TychoFallbackRouter.sol";
+import {IUniswapV3StaticQuoter} from "@interfaces/IUniswapV3StaticQuoter.sol";
 import {UniswapV2Executor} from "../src/executors/UniswapV2Executor.sol";
 import {
     UniswapV3Executor,
@@ -296,7 +297,11 @@ contract TychoRouterTestSetup is
             nativeExecutor = new NativeExecutor(nativeRouterV6);
         }
 
-        fallbackRouter = new TychoFallbackRouter(poolManager, FLUIDV1_LIQUIDITY);
+        fallbackRouter = new TychoFallbackRouter(
+            poolManager,
+            FLUIDV1_LIQUIDITY,
+            IUniswapV3StaticQuoter(UNISWAP_V3_STATIC_QUOTER)
+        );
         fallbackExecutor = new FallbackExecutor(address(fallbackRouter));
         // Last, per the note above: Lido V4 is only configured on mainnet, where both Sky and
         // Native always deploy, so appending it shifts no address before it.
