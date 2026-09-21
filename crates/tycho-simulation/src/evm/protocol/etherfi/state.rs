@@ -722,8 +722,9 @@ impl ProtocolSim for EtherfiState {
             }
         }
 
-        // Decode all fields before mutation so invalid deltas leave a consistent quote state.
-        // Each component accepts only its own attributes.
+        // Every read that can fail happens before the first assignment, so a delta the decoder
+        // rejects leaves the state as it was. Each component reads only its own attributes, and
+        // `venue_fields` is decoded against `self.venue`, so the venue arms below only assign.
         let total_value_out_of_lp = read(TOTAL_VALUE_OUT_OF_LP_ATTR)?;
         let total_value_in_lp = read(TOTAL_VALUE_IN_LP_ATTR)?;
         let total_shares = read(TOTAL_SHARES_ATTR)?;
@@ -779,7 +780,8 @@ impl ProtocolSim for EtherfiState {
                     wrapper.weeth_shares = value;
                 }
             }
-            // Decoded fields must match the component's unchanged venue.
+            // Unreachable: `venue_fields` was decoded against `self.venue`, which nothing above
+            // changes. The arm exists so the match is exhaustive without a wildcard.
             (Venue::Pool(_), VenueFields::Wrapper { .. }) |
             (Venue::Wrapper(_), VenueFields::Pool { .. }) => {
                 return Err(TransitionError::DecodeError(
