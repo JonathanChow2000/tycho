@@ -68,7 +68,7 @@ static PROTOCOLS: &[FallbackProtocolInfo] = &[
     FallbackProtocolInfo {
         protocol: FallbackProtocol::UniswapV4,
         user_data_name: "uniswap_v4",
-        protocol_systems: &[&["uniswap_v4_hooks"]],
+        protocol_systems: &[],
     },
     FallbackProtocolInfo {
         protocol: FallbackProtocol::Curve,
@@ -560,7 +560,7 @@ mod tests {
             ("pancakeswap_v3", Some(FallbackProtocol::UniswapV3)),
             ("velodrome_slipstreams", Some(FallbackProtocol::UniswapV3)),
             ("uniswap_v4", Some(FallbackProtocol::UniswapV4)),
-            ("uniswap_v4_hooks", Some(FallbackProtocol::UniswapV4)),
+            ("uniswap_v4_hooks", None),
             ("curve", Some(FallbackProtocol::Curve)),
             ("vm:curve", Some(FallbackProtocol::Curve)),
             ("fluid_v1", Some(FallbackProtocol::FluidV1)),
