@@ -421,9 +421,9 @@ protocol systems and fork lists that resolve to it -- and `from_protocol_system`
 `FallbackSwapData` variant with the fields the contract decodes, that variant's arm in
 `FallbackSwapData::encode`, and the protocol's name under each chain in
 `fallback_protocols.json`. The row's index is the protocol byte, matching the contract enum.
-`FallbackProtocol` is `#[repr(u8)]` so the discriminant is that byte. The encoder builds on any chain; the `fallback` section of
-`protocol_specific_addresses.json` is optional and only carries the Angstrom hook to reject on
-chains that have one. No `fallback` entry ships in the executor configs until the
+`FallbackProtocol` is `#[repr(u8)]` so the discriminant is that byte. The encoder builds on any
+chain and takes no config. A Uniswap V4 fallback must name the zero hook and no hook data; hooked
+pools are not supported yet. No `fallback` entry ships in the executor configs until the
 FallbackExecutor is deployed.
 
 ### Angstrom attestations (`evm/swap_encoder/angstrom.rs`)

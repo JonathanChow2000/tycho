@@ -1,4 +1,4 @@
-use std::{collections::HashMap, str::FromStr, sync::LazyLock};
+use std::{collections::HashMap, sync::LazyLock};
 
 use alloy::sol_types::SolValue;
 use serde::Deserialize;
@@ -235,9 +235,12 @@ enum FallbackSwapData {
     UniswapV3 {
         pool: Bytes,
     },
+    /// Hooked pools are not supported yet: `hook` must be absent or the zero address and
+    /// `hook_data` absent or empty.
     UniswapV4 {
         fee: u32,
         tick_spacing: i32,
+        #[serde(default)]
         hook: Bytes,
         #[serde(default)]
         hook_data: Bytes,
@@ -286,10 +289,16 @@ impl FallbackSwapData {
                         "Uniswap V4 fallback tick spacing {tick_spacing} does not fit int24"
                     )));
                 }
+                if hook.iter().any(|byte| *byte != 0) || !hook_data.is_empty() {
+                    return Err(EncodingError::InvalidInput(
+                        "Uniswap V4 hooks are not supported as a fallback yet: hook must be the \
+                         zero address and hook_data empty"
+                            .to_string(),
+                    ));
+                }
                 data.extend_from_slice(&fee.to_be_bytes()[1..]);
                 data.extend_from_slice(&tick_spacing.to_be_bytes()[1..]);
-                data.extend_from_slice(bytes_to_address(hook)?.as_slice());
-                data.extend_from_slice(hook_data.as_ref());
+                data.extend_from_slice(&[0u8; 20]);
             }
             FallbackSwapData::Curve { pool, pool_type, i, j } => {
                 data.extend_from_slice(bytes_to_address(pool)?.as_slice());
@@ -313,13 +322,10 @@ impl FallbackSwapData {
 /// # Fields
 /// * `executor_address` - The executor that performs the swap.
 /// * `chain` - The chain whose router runs the swap. Protocols it does not run are rejected.
-/// * `angstrom_hook_address` - The chain's Angstrom hook, if any. Uniswap V4 fallbacks on it are
-///   rejected.
 #[derive(Clone)]
 pub struct FallbackSwapEncoder {
     executor_address: Bytes,
     chain: Chain,
-    angstrom_hook_address: Option<Bytes>,
 }
 
 impl FallbackSwapEncoder {
@@ -350,37 +356,15 @@ impl FallbackSwapEncoder {
         }
         Ok(())
     }
-
-    /// Rejects a Uniswap V4 fallback on the Angstrom hook.
-    fn reject_angstrom_hook(&self, data: &FallbackSwapData) -> Result<(), EncodingError> {
-        if let FallbackSwapData::UniswapV4 { hook, .. } = data {
-            if Some(hook) == self.angstrom_hook_address.as_ref() {
-                return Err(EncodingError::InvalidInput(
-                    "Angstrom pools are unsupported as a fallback protocol".to_string(),
-                ));
-            }
-        }
-        Ok(())
-    }
 }
 
 impl SwapEncoder for FallbackSwapEncoder {
     fn new(
         executor_address: Bytes,
         chain: Chain,
-        config: Option<HashMap<String, String>>,
+        _config: Option<HashMap<String, String>>,
     ) -> Result<Self, EncodingError> {
-        let angstrom_hook_address = config
-            .as_ref()
-            .and_then(|config| config.get("angstrom_hook_address"))
-            .map(|address| {
-                Bytes::from_str(address).map_err(|_| {
-                    EncodingError::FatalError(format!("Invalid Angstrom hook address {address}"))
-                })
-            })
-            .transpose()?;
-
-        Ok(Self { executor_address, chain, angstrom_hook_address })
+        Ok(Self { executor_address, chain })
     }
 
     fn encode_swap(
@@ -390,7 +374,6 @@ impl SwapEncoder for FallbackSwapEncoder {
     ) -> Result<Vec<u8>, EncodingError> {
         let fallback = FallbackSwap::from_user_data(swap.user_data())?;
         self.reject_unsupported(fallback.protocol)?;
-        self.reject_angstrom_hook(&fallback.data)?;
         let pamm = bytes_to_address(&Self::pamm_address(swap)?)?;
         let token_in = bytes_to_address(&swap.token_in().address)?;
         let token_out = bytes_to_address(&swap.token_out().address)?;
@@ -437,20 +420,8 @@ mod tests {
         }
     }
 
-    // The mainnet address from the `fallback` section of
-    // `config/protocol_specific_addresses.json`.
-    const ANGSTROM_HOOK: &str = "0000000aa232009084Bd71A5797d089AA4Edfad4";
-
     fn encoder() -> FallbackSwapEncoder {
-        FallbackSwapEncoder::new(
-            Bytes::default(),
-            Chain::Ethereum,
-            Some(HashMap::from([(
-                "angstrom_hook_address".to_string(),
-                format!("0x{ANGSTROM_HOOK}"),
-            )])),
-        )
-        .unwrap()
+        FallbackSwapEncoder::new(Bytes::default(), Chain::Ethereum, None).unwrap()
     }
 
     fn encode_usdc_weth(user_data: Option<&str>) -> Result<String, EncodingError> {
@@ -666,24 +637,21 @@ mod tests {
     fn test_encode_uniswap_v4_fallback() {
         let hex_swap = encode_usdc_weth(Some(
             r#"{"fallback_protocol":"uniswap_v4","fee":3000,"tick_spacing":-60,
-                "hook":"0x2222222222222222222222222222222222222222","hook_data":"0xdeadbeef"}"#,
+                "hook":"0x0000000000000000000000000000000000000000","hook_data":"0x"}"#,
         ))
         .unwrap();
 
         // fee 3000 = 0x000bb8; tick spacing -60 = 0xffffc4 in int24 two's complement.
         assert_eq!(
             hex_swap,
-            format!(
-                "{USDC}{WETH}{PAMM}02000bb8ffffc42222222222222222222222222222222222222222deadbeef"
-            )
+            format!("{USDC}{WETH}{PAMM}02000bb8ffffc40000000000000000000000000000000000000000")
         );
     }
 
     #[test]
-    fn test_encode_uniswap_v4_fallback_without_hook_data() {
+    fn test_encode_uniswap_v4_fallback_without_hook_fields() {
         let hex_swap = encode_usdc_weth(Some(
-            r#"{"fallback_protocol":"uniswap_v4","fee":500,"tick_spacing":10,
-                "hook":"0x0000000000000000000000000000000000000000"}"#,
+            r#"{"fallback_protocol":"uniswap_v4","fee":500,"tick_spacing":10}"#,
         ))
         .unwrap();
 
@@ -691,6 +659,26 @@ mod tests {
             hex_swap,
             format!("{USDC}{WETH}{PAMM}020001f400000a0000000000000000000000000000000000000000")
         );
+    }
+
+    #[test]
+    fn test_rejects_uniswap_v4_hook() {
+        let err = encode_usdc_weth(Some(
+            r#"{"fallback_protocol":"uniswap_v4","fee":3000,"tick_spacing":60,
+                "hook":"0x2222222222222222222222222222222222222222"}"#,
+        ))
+        .unwrap_err();
+        assert!(matches!(err, EncodingError::InvalidInput(msg) if msg.contains("hooks")));
+    }
+
+    #[test]
+    fn test_rejects_uniswap_v4_hook_data() {
+        let err = encode_usdc_weth(Some(
+            r#"{"fallback_protocol":"uniswap_v4","fee":3000,"tick_spacing":60,
+                "hook":"0x0000000000000000000000000000000000000000","hook_data":"0xdeadbeef"}"#,
+        ))
+        .unwrap_err();
+        assert!(matches!(err, EncodingError::InvalidInput(msg) if msg.contains("hooks")));
     }
 
     #[test]
@@ -803,65 +791,5 @@ mod tests {
     #[test]
     fn test_encoder_builds_on_any_chain_without_config() {
         FallbackSwapEncoder::new(Bytes::zero(20), Chain::Base, None).unwrap();
-    }
-
-    #[test]
-    fn test_encoder_rejects_malformed_angstrom_hook() {
-        let config = HashMap::from([("angstrom_hook_address".to_string(), "0xzz".to_string())]);
-        let result = FallbackSwapEncoder::new(Bytes::zero(20), Chain::Ethereum, Some(config));
-        assert!(matches!(result, Err(EncodingError::FatalError(msg)) if msg.contains("0xzz")));
-    }
-
-    fn encode_v4_with_hook(
-        encoder: &FallbackSwapEncoder,
-        hook: &str,
-    ) -> Result<String, EncodingError> {
-        let token_in = Bytes::from(format!("0x{USDC}").as_str());
-        let token_out = Bytes::from(format!("0x{WETH}").as_str());
-        let swap = Swap::new(
-            usdc_weth_component(),
-            default_token(token_in.clone()),
-            default_token(token_out.clone()),
-            BigUint::ZERO,
-        )
-        .with_user_data(Bytes::from(
-            format!(
-                r#"{{"fallback_protocol":"uniswap_v4","fee":3000,"tick_spacing":60,"hook":"0x{hook}"}}"#
-            )
-            .into_bytes(),
-        ));
-        let encoding_context = EncodingContext {
-            router_address: Some(Bytes::zero(20)),
-            group_token_in: token_in,
-            group_token_out: token_out,
-        };
-        encoder
-            .encode_swap(&swap, &encoding_context)
-            .map(|encoded| encode(&encoded))
-    }
-
-    #[test]
-    fn test_angstrom_hook() {
-        let err = encode_v4_with_hook(&encoder(), ANGSTROM_HOOK).unwrap_err();
-        assert!(matches!(err, EncodingError::InvalidInput(msg) if msg.contains("Angstrom")));
-    }
-
-    #[test]
-    fn test_non_angstrom_hook() {
-        let hook = "2222222222222222222222222222222222222222";
-        let hex_swap = encode_v4_with_hook(&encoder(), hook).unwrap();
-        // fee 3000 = 0x000bb8; tick spacing 60 = 0x00003c.
-        assert_eq!(hex_swap, format!("{USDC}{WETH}{PAMM}02000bb800003c{hook}"));
-    }
-
-    /// A chain without Angstrom configures no hook, so no hook is rejected.
-    #[test]
-    fn test_no_angstrom_hook_configured_accepts_any_hook() {
-        let encoder = FallbackSwapEncoder::new(Bytes::default(), Chain::Base, None).unwrap();
-        let hex_swap = encode_v4_with_hook(&encoder, ANGSTROM_HOOK).unwrap();
-        assert_eq!(
-            hex_swap,
-            format!("{USDC}{WETH}{PAMM}02000bb800003c{}", ANGSTROM_HOOK.to_lowercase())
-        );
     }
 }
