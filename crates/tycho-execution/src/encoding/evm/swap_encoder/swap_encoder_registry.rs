@@ -8,7 +8,7 @@ use crate::encoding::{
         constants::{
             DEFAULT_EXECUTORS_JSON, FALLBACK_KEY, FALLBACK_PREFIX, PRICE_LEVEL_STREAM_KEY,
             PRICE_LEVEL_STREAM_PREFIX, PROPAMM_FALLBACK_KEY, PROPAMM_FALLBACK_PREFIX,
-            PROTOCOL_SPECIFIC_CONFIG, UNISWAP_V2_FORKS, UNISWAP_V3_FORKS,
+            PROTOCOL_SPECIFIC_CONFIG, SLIPSTREAMS_FORKS, UNISWAP_V2_FORKS, UNISWAP_V3_FORKS,
         },
         swap_encoder::{
             aerodrome_v1::AerodromeV1SwapEncoder, balancer_v2::BalancerV2SwapEncoder,
@@ -201,7 +201,7 @@ impl SwapEncoderRegistry {
             "vm:liquidityparty" => {
                 Ok(Box::new(LiquidityPartySwapEncoder::new(executor_address, self.chain, config)?))
             }
-            "aerodrome_slipstreams" => {
+            p if SLIPSTREAMS_FORKS.contains(&p) => {
                 Ok(Box::new(SlipstreamsSwapEncoder::new(executor_address, self.chain, config)?))
             }
             "rocketpool" => {
@@ -213,31 +213,6 @@ impl SwapEncoderRegistry {
             }
             "lunarbase" => {
                 Ok(Box::new(LunarBaseSwapEncoder::new(executor_address, self.chain, config)?))
-            }
-            "velodrome_slipstreams" => {
-                Ok(Box::new(SlipstreamsSwapEncoder::new(executor_address, self.chain, config)?))
-            }
-            // UP on Robinhood Chain deploys the Slipstream contracts verbatim, and its pools price
-            // swaps through a dynamic fee module, so it encodes like the other Slipstream forks.
-            "up_v3" => {
-                Ok(Box::new(SlipstreamsSwapEncoder::new(executor_address, self.chain, config)?))
-            }
-            // Ramses V3 reuses the standard Uniswap V3 executor unchanged, encoded via the
-            // Slipstreams encoder. Three things make this sound:
-            //   1. ABI match: the Ramses pool exposes the identical
-            //      `swap(address,bool,int256,uint160,bytes)` and calls `uniswapV3SwapCallback`,
-            //      which the router's selector-agnostic fallback routes back to the executor.
-            //   2. The executor's `_decodeData` reads only the pool address (bytes 43..63) and the
-            //      zero-for-one flag (byte 63): it calls `pool.swap` on that address without
-            //      recomputing it, and never touches the 3-byte slot at bytes 40..43. So it is
-            //      irrelevant both that Ramses keys pools by tick spacing rather than fee, and that
-            //      the Slipstreams encoder packs `tick_spacing` into that slot (where Uniswap V3
-            //      packs the fee).
-            //   3. The SlipstreamsExecutor contract is byte-for-byte identical to the
-            //      UniswapV3Executor, so the encoder choice does not imply a different on-chain
-            //      executor.
-            "ramses_v3" => {
-                Ok(Box::new(SlipstreamsSwapEncoder::new(executor_address, self.chain, config)?))
             }
             "native_wrapper" => {
                 Ok(Box::new(WrapSwapEncoder::new(executor_address, self.chain, config)?))

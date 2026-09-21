@@ -7,7 +7,9 @@ use tycho_common::{models::Chain, Bytes};
 use crate::encoding::{
     errors::EncodingError,
     evm::{
-        constants::{FALLBACK_PROTOCOLS_JSON, UNISWAP_V2_FORKS, UNISWAP_V3_FORKS},
+        constants::{
+            FALLBACK_PROTOCOLS_JSON, SLIPSTREAMS_FORKS, UNISWAP_V2_FORKS, UNISWAP_V3_FORKS,
+        },
         utils::bytes_to_address,
     },
     models::{EncodingContext, Swap},
@@ -20,12 +22,6 @@ const PAMM_ADDRESS_ATTRIBUTE: &str = "pamm_address";
 
 /// The highest Uniswap V2 fee `TychoFallbackRouter` accepts (`feeBps <= 30`).
 const MAX_UNISWAP_V2_FEE_BPS: u8 = 30;
-
-/// Slipstream deployments and their forks. The registry encodes them through
-/// `SlipstreamsSwapEncoder` because their executor data differs from Uniswap V3's, but the pool
-/// itself keeps V3's `swap` ABI and callback, which is all `TychoFallbackRouter` uses.
-const SLIPSTREAMS_FORKS: &[&str] =
-    &["aerodrome_slipstreams", "velodrome_slipstreams", "up_v3", "ramses_v3"];
 
 /// A protocol `TychoFallbackRouter` can fall back on, one per variant of the contract's
 /// `FallbackProtocol` enum. The discriminant is the wire format's protocol byte, so the two enums
