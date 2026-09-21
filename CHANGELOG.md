@@ -1,3 +1,41 @@
+## [0.412.0](https://github.com/propeller-heads/tycho/compare/0.411.0...0.412.0) (2026-09-21)
+
+
+### Features
+
+* add ethereum-lido-v3 substreams package ([63c7792](https://github.com/propeller-heads/tycho/commit/63c7792d7b4939b0509f56ee09bc8b1b7ce20f5f))
+* lido v4 integration ([#929](https://github.com/propeller-heads/tycho/issues/929)) ([691ca4e](https://github.com/propeller-heads/tycho/commit/691ca4eaed4c9c5cc27ef6de527118faf77efb50))
+* **lido:** anchor the component to the upgrade transaction ([b289f41](https://github.com/propeller-heads/tycho/commit/b289f412667dcf9427d55e52840c37256c691171))
+* **lido:** move pooled-ether accounting to the Lido v4 storage layout ([262e198](https://github.com/propeller-heads/tycho/commit/262e198e0a622a1f4a3e42c3a8472dcb43da601a))
+* **lido:** pause the component when stETH changes implementation ([e64fb38](https://github.com/propeller-heads/tycho/commit/e64fb381c90220555c708639209b474bdf2896a9))
+* **lido:** quote ETH -> wstETH through the wrapper's receive() ([1a46bfe](https://github.com/propeller-heads/tycho/commit/1a46bfe17edf107636f919c003a679d9c0f4e61f))
+* **lido:** rename the integration to lido_v4 ([85188e3](https://github.com/propeller-heads/tycho/commit/85188e3d63db6652639d037ee6ba5b6d3b5eca7f))
+* register lido_v3 in protocol testing ([63d8989](https://github.com/propeller-heads/tycho/commit/63d89896ae0a4a926e90f6cde17be9d9a45d2993))
+* **tycho-execution:** add lido v3 execution support ([ef5a4e4](https://github.com/propeller-heads/tycho/commit/ef5a4e46356f6a61b1845df7f1d6b7ae7d2e38df))
+* **tycho-simulation:** add lido v3 simulation ([17551f9](https://github.com/propeller-heads/tycho/commit/17551f931b85dba20d33a1186caf9b4a368f5a1e))
+
+
+### Bug Fixes
+
+* **lido:** align storage updates, trade limits and unwrap receipts ([51d1a18](https://github.com/propeller-heads/tycho/commit/51d1a1855f8df621489cdbb356ad6b983d1a90ed))
+* **lido:** check the staking word against the fields it packs ([bba75ad](https://github.com/propeller-heads/tycho/commit/bba75ad60b6bd0d6dc99b3ca8fc2d894cf55d696))
+* **lido:** fail loudly when a store value does not decode ([c61cc7a](https://github.com/propeller-heads/tycho/commit/c61cc7aabed912132ca8f348cb0fca40f4332487))
+* **lido:** match the chain on unwrap dust, the wrap bound and gas ([9dacbb1](https://github.com/propeller-heads/tycho/commit/9dacbb121c00ad263571aa2e3d815ec9b4f44908))
+* **lido:** pause on the implementation a transaction ends on, and cover the filters ([142677a](https://github.com/propeller-heads/tycho/commit/142677a3d14e614338488c3aea5588b6ac20e7c6))
+* **lido:** pick the anchor transaction deterministically ([36ed25a](https://github.com/propeller-heads/tycho/commit/36ed25a068a985a2b3d9f3eb0090079b1feb4803))
+* **lido:** reject attributes wider than their storage field ([39c9d50](https://github.com/propeller-heads/tycho/commit/39c9d5080b908ac2a00a1c14791e781bf0d52914))
+* **tycho-execution:** charge lido's output transfer and wrap approval ([27ffc86](https://github.com/propeller-heads/tycho/commit/27ffc8624e74c03c6d93089130ce959851d4c517))
+* **tycho-simulation:** bound lido v3 wrap and unwrap limits ([a6cd9df](https://github.com/propeller-heads/tycho/commit/a6cd9df090aebc353230f063b20dfcba67262768))
+* **tycho-simulation:** bound the lido unwrap quote by the wrapper's shares ([3ce791e](https://github.com/propeller-heads/tycho/commit/3ce791e7f94cb07c627809a66a870bf1d4654a3f))
+* **tycho-simulation:** let an unknown lido token error instead of reading as zero ([cde47bf](https://github.com/propeller-heads/tycho/commit/cde47bfec89a1c2c329b472590d17256ef0106ae))
+* **tycho-simulation:** quote lido stETH/ETH in both orderings ([d6aa72e](https://github.com/propeller-heads/tycho/commit/d6aa72e811f9c4e3e4630c98298ee84095f66288))
+* **tycho-simulation:** use checked arithmetic in the lido share math ([cc9d1d0](https://github.com/propeller-heads/tycho/commit/cc9d1d09a83a88a8f881e381db93446b3754205f))
+
+
+### Performance Improvements
+
+* **lido:** defer the per-block balance state read ([1df4417](https://github.com/propeller-heads/tycho/commit/1df44170af0a61847e008ffd294d39c20812a726))
+
 ## [0.411.0](https://github.com/propeller-heads/tycho/compare/0.410.0...0.411.0) (2026-09-21)
 
 
