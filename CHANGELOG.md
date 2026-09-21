@@ -1,3 +1,12 @@
+## [0.415.0](https://github.com/propeller-heads/tycho/compare/0.414.0...0.415.0) (2026-09-21)
+
+
+### Features
+
+* add Arc chain and native USDC model ([#1467](https://github.com/propeller-heads/tycho/issues/1467)) ([3d2a388](https://github.com/propeller-heads/tycho/commit/3d2a38877e9cfe2a4557f90ff777ff8372587a52))
+* add Arc chain model and DTOs ([4ab1af5](https://github.com/propeller-heads/tycho/commit/4ab1af5b8e177db7c9a04c876e7ece0c191c10e7))
+* model Arc native USDC ([0e23bc2](https://github.com/propeller-heads/tycho/commit/0e23bc291b4514cebf4631f6dbac3332a2810086))
+
 ## [0.414.0](https://github.com/propeller-heads/tycho/compare/0.413.0...0.414.0) (2026-09-21)
 
 
