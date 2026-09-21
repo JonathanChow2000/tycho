@@ -1,0 +1,59 @@
+{
+  "ethereum": [
+    "uniswap_v2",
+    "uniswap_v3",
+    "uniswap_v4",
+    "curve",
+    "fluid_v1",
+    "aerodrome_v1"
+  ],
+  "base": [
+    "uniswap_v2",
+    "uniswap_v3",
+    "uniswap_v4",
+    "curve",
+    "aerodrome_v1"
+  ],
+  "unichain": [
+    "uniswap_v2",
+    "uniswap_v3",
+    "uniswap_v4",
+    "curve",
+    "aerodrome_v1"
+  ],
+  "arbitrum": [
+    "uniswap_v2",
+    "uniswap_v3",
+    "uniswap_v4",
+    "curve",
+    "aerodrome_v1"
+  ],
+  "bsc": [
+    "uniswap_v2",
+    "uniswap_v3",
+    "uniswap_v4",
+    "curve",
+    "aerodrome_v1"
+  ],
+  "polygon": [
+    "uniswap_v2",
+    "uniswap_v3",
+    "uniswap_v4",
+    "curve",
+    "aerodrome_v1"
+  ],
+  "plasma": [
+    "uniswap_v2",
+    "uniswap_v3",
+    "curve",
+    "fluid_v1",
+    "aerodrome_v1"
+  ],
+  "robinhood": [
+    "uniswap_v2",
+    "uniswap_v3",
+    "uniswap_v4",
+    "curve",
+    "aerodrome_v1"
+  ]
+}

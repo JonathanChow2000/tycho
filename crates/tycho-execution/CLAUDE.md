@@ -254,7 +254,9 @@ Constraints:
 - `scripts/deploy-fallback-router.js` deploys the contract through the CREATE2 factory, reading `poolManager` and
   `fluidLiquidity` from the chain's `uniswap_v4` and `fluid_v1` entries in `config/executor_deployments.json` and the
   static quoter from `fallback_router.uniswap_v3_static_quoter` in `config/protocol_specific_addresses.json`, zeroing
-  whichever is missing. The `FallbackExecutor` then goes through `deploy-executors.js` like any executor: add a
+  whichever is missing. It refuses to deploy when `config/fallback_protocols.json` disagrees: a chain that lists
+  Uniswap V4 or Fluid V1 must have the singleton, and a chain with the singleton must list the protocol. The
+  `FallbackExecutor` then goes through `deploy-executors.js` like any executor: add a
   `fallback` entry with the printed router address to `executor_deployments.json` and list `fallback` under the
   chain. Not deployed anywhere yet.
 - The contract holds no funds between transactions. A balance that does end up here (Curve rounding dust, a mistaken
@@ -400,23 +402,25 @@ static attribute. The public `FallbackProtocol` enum (`swap_encoder::FallbackPro
 list other projects import: `all()` yields every protocol in protocol-byte order,
 `from_protocol_system` maps a Tycho protocol name to the variant it
 encodes as (`UNISWAP_V2_FORKS`, `UNISWAP_V3_FORKS` and the Slipstreams deployments resolve to
-their base variant, `vm:curve` to Curve), `supported_on(chain)` says whether the chain's
-`TychoFallbackRouter` can run it, derived from `executor_addresses.json` -- Uniswap V4 and
-Fluid V1 need the chain to have that executor, since that is what the deploy script keys their
-singletons on -- and `user_data_name` is the tag to write. The encoder rejects a protocol the
-chain's deployment cannot run with an `InvalidInput` error instead of letting it revert on
-chain.
+their base variant, `vm:curve` to Curve), `supported(chain)` and `supported_on(chain)` say which
+protocols the chain's `TychoFallbackRouter` runs, and `user_data_name` is the tag to write. The
+encoder rejects a protocol the chain's router does not run with an `InvalidInput` error instead
+of letting it revert on chain.
 
-`supported_on` asks the deployment, not the liquidity. A protocol addressed per swap -- Uniswap
-V2/V3, Curve, Aerodrome V1 -- needs nothing from the router's constructor, so it is supported on
-every chain, Aerodrome V1 included even though its pools are on Base. Which chains have a
-protocol's pools is the component stream's answer, not the router's.
+`config/fallback_protocols.json` lists the protocols each chain's router runs, and
+`supported_on` reads it. Uniswap V4 and Fluid V1 appear only on chains whose router was deployed
+with their singleton; every other protocol takes its pool from the swap and appears on every
+chain with a router -- Aerodrome V1 included even though its pools are on Base. Which chains have
+a protocol's pools is the component stream's answer, not the router's. A chain missing from the
+file has no router and supports nothing. `deploy-fallback-router.js` refuses to deploy a router
+that disagrees with the file.
 
-The `PROTOCOLS` table in `fallback.rs` holds one row per protocol -- its `user_data_name`, the
-protocol systems and fork lists that resolve to it, and the executor its per-chain singleton comes
-from -- and the three methods above read that table, so adding a fallback protocol means adding a
-row, a `FallbackSwapData` variant with the fields the contract decodes, and that variant's arm in
-`FallbackSwapData::encode`. The row's index is the protocol byte, matching the contract enum.
+The `PROTOCOLS` table in `fallback.rs` holds one row per protocol -- its `user_data_name` and the
+protocol systems and fork lists that resolve to it -- and `from_protocol_system` and
+`user_data_name` read that table, so adding a fallback protocol means adding a row, a
+`FallbackSwapData` variant with the fields the contract decodes, that variant's arm in
+`FallbackSwapData::encode`, and the protocol's name under each chain in
+`fallback_protocols.json`. The row's index is the protocol byte, matching the contract enum.
 `FallbackProtocol` is `#[repr(u8)]` so the discriminant is that byte. The encoder builds on any chain; the `fallback` section of
 `protocol_specific_addresses.json` is optional and only carries the Angstrom hook to reject on
 chains that have one. No `fallback` entry ships in the executor configs until the

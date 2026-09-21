@@ -1,8 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    str::FromStr,
-    sync::LazyLock,
-};
+use std::{collections::HashMap, str::FromStr, sync::LazyLock};
 
 use alloy::sol_types::SolValue;
 use serde::Deserialize;
@@ -11,7 +7,7 @@ use tycho_common::{models::Chain, Bytes};
 use crate::encoding::{
     errors::EncodingError,
     evm::{
-        constants::{DEFAULT_EXECUTORS_JSON, UNISWAP_V2_FORKS, UNISWAP_V3_FORKS},
+        constants::{FALLBACK_PROTOCOLS_JSON, UNISWAP_V2_FORKS, UNISWAP_V3_FORKS},
         utils::bytes_to_address,
     },
     models::{EncodingContext, Swap},
@@ -31,21 +27,6 @@ const MAX_UNISWAP_V2_FEE_BPS: u8 = 30;
 const SLIPSTREAMS_FORKS: &[&str] =
     &["aerodrome_slipstreams", "velodrome_slipstreams", "up_v3", "ramses_v3"];
 
-/// The protocols a chain's executor config names, keyed by chain. A chain has a protocol's
-/// per-chain singleton exactly when it has that protocol's executor, which is also how
-/// `deploy-fallback-router.js` decides which singletons the chain's `TychoFallbackRouter` gets.
-static EXECUTOR_PROTOCOLS: LazyLock<HashMap<Chain, HashSet<String>>> = LazyLock::new(|| {
-    let config: HashMap<Chain, HashMap<String, String>> =
-        serde_json::from_str(DEFAULT_EXECUTORS_JSON)
-            // Embedded at compile time and parsed by every registry test, so a failure here
-            // is a broken build, not a runtime condition.
-            .expect("config/executor_addresses.json is valid");
-    config
-        .into_iter()
-        .map(|(chain, executors)| (chain, executors.into_keys().collect()))
-        .collect()
-});
-
 /// A protocol `TychoFallbackRouter` can fall back on, one per variant of the contract's
 /// `FallbackProtocol` enum. The discriminant is the wire format's protocol byte, so the two enums
 /// keep the same order.
@@ -64,7 +45,8 @@ pub enum FallbackProtocol {
     AerodromeV1,
 }
 
-/// Everything the encoder knows about one fallback protocol besides how to pack its data.
+/// How one fallback protocol is named. Which chains run it is in
+/// `config/fallback_protocols.json`; how its data is packed is in [`FallbackSwapData`].
 struct FallbackProtocolInfo {
     /// The protocol this row describes. Its discriminant is the row's index in [`PROTOCOLS`].
     protocol: FallbackProtocol,
@@ -75,12 +57,6 @@ struct FallbackProtocolInfo {
     /// The other Tycho `protocol_system` names that encode as this protocol, grouped as the fork
     /// lists they come in.
     protocol_systems: &'static [&'static [&'static str]],
-    /// The executor a chain must have for its `TychoFallbackRouter` to run this protocol: the
-    /// protocol calls a per-chain singleton the router takes as a constructor immutable, and
-    /// `deploy-fallback-router.js` reads that singleton out of this executor's deployment entry.
-    /// `None` for a protocol whose pool the swap addresses directly, which needs nothing from the
-    /// deployment.
-    required_executor: Option<&'static str>,
 }
 
 /// One row per [`FallbackProtocol`], in protocol-byte order.
@@ -93,13 +69,14 @@ struct FallbackProtocolInfo {
 ///    serde's snake case spells the row's `user_data_name`.
 /// 4. Add that variant's arm to [`FallbackSwapData::encode`], packing the fields in the order the
 ///    contract reads them.
+/// 5. List its `user_data_name` under each chain whose router runs it in
+///    `config/fallback_protocols.json`.
 static PROTOCOLS: &[FallbackProtocolInfo] = &[
     FallbackProtocolInfo {
         protocol: FallbackProtocol::UniswapV2,
         user_data_name: "uniswap_v2",
         // The forks share the constant-fee `swap(amount0Out, amount1Out, to, data)` pool.
         protocol_systems: &[UNISWAP_V2_FORKS],
-        required_executor: None,
     },
     FallbackProtocolInfo {
         protocol: FallbackProtocol::UniswapV3,
@@ -107,33 +84,26 @@ static PROTOCOLS: &[FallbackProtocolInfo] = &[
         // The forks and the Slipstream deployments share V3's `swap` and callback, which
         // `TychoFallbackRouter` answers whatever selector the fork renamed it to.
         protocol_systems: &[UNISWAP_V3_FORKS, SLIPSTREAMS_FORKS],
-        required_executor: None,
     },
     FallbackProtocolInfo {
         protocol: FallbackProtocol::UniswapV4,
         user_data_name: "uniswap_v4",
         protocol_systems: &[&["uniswap_v4_hooks"]],
-        // The PoolManager.
-        required_executor: Some("uniswap_v4"),
     },
     FallbackProtocolInfo {
         protocol: FallbackProtocol::Curve,
         user_data_name: "curve",
         protocol_systems: &[&["vm:curve"]],
-        required_executor: None,
     },
     FallbackProtocolInfo {
         protocol: FallbackProtocol::FluidV1,
         user_data_name: "fluid_v1",
         protocol_systems: &[],
-        // The liquidity layer.
-        required_executor: Some("fluid_v1"),
     },
     FallbackProtocolInfo {
         protocol: FallbackProtocol::AerodromeV1,
         user_data_name: "aerodrome_v1",
         protocol_systems: &[],
-        required_executor: None,
     },
 ];
 
@@ -146,6 +116,30 @@ impl FallbackProtocolInfo {
                 .any(|names| names.contains(&protocol_system))
     }
 }
+
+/// The protocols each chain's `TychoFallbackRouter` runs, from `config/fallback_protocols.json`.
+/// A chain missing from the file has no router. `deploy-fallback-router.js` checks the file
+/// against the singletons it deploys the router with.
+static SUPPORTED_PROTOCOLS: LazyLock<HashMap<Chain, Vec<FallbackProtocol>>> = LazyLock::new(|| {
+    let config: HashMap<Chain, Vec<String>> = serde_json::from_str(FALLBACK_PROTOCOLS_JSON)
+        // Embedded at compile time and parsed by every test below, so a failure here is a
+        // broken build, not a runtime condition.
+        .expect("config/fallback_protocols.json is valid");
+    config
+        .into_iter()
+        .map(|(chain, names)| {
+            let protocols = names
+                .iter()
+                .map(|name| {
+                    FallbackProtocol::from_protocol_system(name).unwrap_or_else(|| {
+                        panic!("config/fallback_protocols.json names no fallback protocol {name}")
+                    })
+                })
+                .collect();
+            (chain, protocols)
+        })
+        .collect()
+});
 
 impl FallbackProtocol {
     /// Every protocol, in protocol-byte order.
@@ -182,26 +176,23 @@ impl FallbackProtocol {
             .map(|info| info.protocol)
     }
 
-    /// Whether `chain`'s `TychoFallbackRouter` can run this protocol.
+    /// Whether `chain`'s `TychoFallbackRouter` runs this protocol, per
+    /// `config/fallback_protocols.json`.
     ///
-    /// This asks the deployment, not the liquidity. A protocol with a `required_executor` calls a
-    /// per-chain singleton the router takes as a constructor immutable, and a chain without that
-    /// executor deploys the router with `address(0)` there, which makes the protocol revert
-    /// `TychoFallbackRouter__ProtocolUnavailable`. Every other protocol takes its pool address
-    /// from the swap, so one router build runs it on every chain and this returns `true`
-    /// everywhere — for Aerodrome V1 too, whose pools are on Base. Which chains have a protocol's
-    /// pools is the component stream's answer: off Base it streams no Aerodrome V1 component, so
-    /// no solver names one as a fallback.
+    /// Uniswap V4 and Fluid V1 call a per-chain singleton the router takes as a constructor
+    /// immutable, so a chain lists them only when its router was deployed with that singleton.
+    /// Every other protocol takes its pool address from the swap, so every chain with a router
+    /// lists it — Aerodrome V1 too, whose pools are on Base. Which chains have a protocol's pools
+    /// is the component stream's answer: off Base it streams no Aerodrome V1 component, so no
+    /// solver names one as a fallback.
     pub fn supported_on(self, chain: Chain) -> bool {
-        let Some(executor) = self.info().required_executor else {
-            return true;
-        };
-        EXECUTOR_PROTOCOLS
+        SUPPORTED_PROTOCOLS
             .get(&chain)
-            .is_some_and(|executors| executors.contains(executor))
+            .is_some_and(|protocols| protocols.contains(&self))
     }
 
-    /// The protocols `chain`'s `TychoFallbackRouter` can run, in protocol-byte order.
+    /// The protocols `chain`'s `TychoFallbackRouter` runs, in protocol-byte order. Empty for a
+    /// chain without a router.
     pub fn supported(chain: Chain) -> Vec<Self> {
         Self::all()
             .filter(|protocol| protocol.supported_on(chain))
@@ -384,12 +375,12 @@ impl FallbackSwapEncoder {
             })
     }
 
-    /// Rejects a protocol the chain's `TychoFallbackRouter` deploys without.
+    /// Rejects a protocol the chain's `TychoFallbackRouter` does not run.
     fn reject_unsupported(&self, protocol: FallbackProtocol) -> Result<(), EncodingError> {
         if !protocol.supported_on(self.chain) {
             return Err(EncodingError::InvalidInput(format!(
-                "Fallback protocol {} is unavailable on {}: the chain's TychoFallbackRouter \
-                 deploys without its singleton, so the swap would revert on chain",
+                "Fallback protocol {} is not listed for {} in config/fallback_protocols.json, \
+                 so the chain's TychoFallbackRouter would revert the swap",
                 protocol.user_data_name(),
                 self.chain
             )));
@@ -650,9 +641,10 @@ mod tests {
         }
     }
 
-    /// Ethereum has every singleton; Base has no Fluid; Plasma has no Uniswap V4.
+    /// Ethereum lists every protocol; Base has no Fluid; Plasma has no Uniswap V4; a chain
+    /// without a router lists nothing.
     #[test]
-    fn test_supported_follows_executor_config() {
+    fn test_supported_follows_fallback_protocols_config() {
         assert_eq!(
             FallbackProtocol::supported(Chain::Ethereum),
             FallbackProtocol::all().collect::<Vec<_>>()
@@ -661,9 +653,10 @@ mod tests {
         assert!(FallbackProtocol::UniswapV4.supported_on(Chain::Base));
         assert!(!FallbackProtocol::UniswapV4.supported_on(Chain::Plasma));
         assert!(FallbackProtocol::FluidV1.supported_on(Chain::Plasma));
-        // A protocol addressed per swap needs nothing from the deployment, so every chain
-        // supports it — Aerodrome V1 off Base too, where the component stream simply offers no
-        // Aerodrome V1 pool to name.
+        assert!(FallbackProtocol::supported(Chain::ZkSync).is_empty());
+        // A protocol addressed per swap needs nothing from the deployment, so every chain with
+        // a router lists it — Aerodrome V1 off Base too, where the component stream simply
+        // offers no Aerodrome V1 pool to name.
         for chain in [Chain::Base, Chain::Plasma, Chain::Unichain] {
             assert!(FallbackProtocol::UniswapV3.supported_on(chain), "{chain}");
             assert!(FallbackProtocol::AerodromeV1.supported_on(chain), "{chain}");
