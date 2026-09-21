@@ -1184,8 +1184,8 @@ contract TychoFallbackRouterFluidTest is TychoFallbackRouterTestBase {
     }
 }
 
-/// @notice Aerodrome V1 lives on Base, where neither Fluid nor the static quoter does, so this
-/// is also the deployment shape a chain missing singletons gets: those slots zeroed.
+/// @notice Aerodrome V1 lives on Base. Base has no Fluid, so this is also a deployment with
+/// that slot zeroed.
 contract TychoFallbackRouterAerodromeTest is
     TychoFallbackRouterTestBase,
     AerodromeV1TestBase
@@ -1193,6 +1193,9 @@ contract TychoFallbackRouterAerodromeTest is
     /// Uniswap V4's PoolManager on Base, from `executor_deployments.json`.
     address constant BASE_POOL_MANAGER =
         0x498581fF718922c3f8e6A244956aF099B2652b2b;
+    /// Eden's Uniswap V3 static quoter on Base, from `protocol_specific_addresses.json`.
+    address constant BASE_STATIC_QUOTER =
+        0x28aF629a9F3ECE3c8D9F0b7cCf6349708CeC8cFb;
 
     /// The block `AerodromeV1.t.sol` forks at, where both pools hold liquidity.
     uint256 constant FORK_BLOCK = 44_682_102;
@@ -1206,7 +1209,7 @@ contract TychoFallbackRouterAerodromeTest is
         router = new TychoFallbackRouter(
             IPoolManager(BASE_POOL_MANAGER),
             address(0),
-            IUniswapV3StaticQuoter(address(0))
+            IUniswapV3StaticQuoter(BASE_STATIC_QUOTER)
         );
         pamm = new MockPropAMM();
     }
