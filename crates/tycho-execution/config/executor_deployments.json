@@ -81,6 +81,10 @@
     },
     "pricelevelstream": { "contract": "PropAMMExecutor", "args": [] },
     "propammfallback": { "contract": "PropAMMFallbackExecutor", "args": [] },
+    "fallback": {
+      "contract": "FallbackExecutor",
+      "args": ["<TYCHO_FALLBACK_ROUTER_ETHEREUM>"]
+    },
     "rfq:metric": {
       "contract": "MetricExecutor",
       "args": []
@@ -135,6 +139,10 @@
       "args": ["0x4200000000000000000000000000000000000006"]
     },
     "lunarbase": { "contract": "LunarBaseExecutor", "args": [] },
+    "fallback": {
+      "contract": "FallbackExecutor",
+      "args": ["<TYCHO_FALLBACK_ROUTER_BASE>"]
+    },
     "rfq:metric": {
       "contract": "MetricExecutor",
       "args": []

@@ -39,6 +39,7 @@ const deploy_protocols = {
         "sky",
         "lido_v4",
         "etherfi",
+        "fallback",
     ],
     "base": [
         "uniswap_v2",
@@ -50,7 +51,8 @@ const deploy_protocols = {
         "native_wrapper",
         "lunarbase",
         "rfq:metric",
-        "rfq:native"
+        "rfq:native",
+        "fallback",
     ],
     "unichain": [
         "uniswap_v2",
