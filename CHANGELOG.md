@@ -1,3 +1,32 @@
+## [0.414.0](https://github.com/propeller-heads/tycho/compare/0.413.0...0.414.0) (2026-09-21)
+
+
+### ⚠ BREAKING CHANGES
+
+* **execution:** keep the per-chain fallback protocols in Rust
+* **execution:** reject hooked Uniswap V4 pools as a fallback
+
+### Features
+
+* **execution:** configure Eden's Uniswap V3 static quoter on Base ([5a7470c](https://github.com/propeller-heads/tycho/commit/5a7470c3cab2faf9522d691266ecdb142fdb306b))
+* **execution:** deploy TychoFallbackRouter per chain, add Aerodrome V1 ([5cd62b9](https://github.com/propeller-heads/tycho/commit/5cd62b901d7c381e80d5e8e6178c7ea565c70ef7))
+* **execution:** expose FallbackProtocol and check chain support when encoding ([7ca24e2](https://github.com/propeller-heads/tycho/commit/7ca24e2d59f8d2dcf7cd876cab1cacbd5cd97f59))
+* **execution:** Fallback router multichain support ([#1462](https://github.com/propeller-heads/tycho/issues/1462)) ([1c9ae03](https://github.com/propeller-heads/tycho/commit/1c9ae033f600688d3b095f24b47de8f97b2d0a0f))
+* **execution:** list each chain's fallback protocols in a config file ([c67e6ce](https://github.com/propeller-heads/tycho/commit/c67e6ce599581fa56ba0ca798557adf3676ffa72))
+* **execution:** reject hooked Uniswap V4 pools as a fallback ([ec011f3](https://github.com/propeller-heads/tycho/commit/ec011f3bf5290bdb418cfbad9bdf3a204ba5bf71))
+
+
+### Bug Fixes
+
+* **execution:** list fallback protocols for Ethereum and Base only ([79769ae](https://github.com/propeller-heads/tycho/commit/79769aeb2db4f73206d24f844a688111c7649eb7))
+* **execution:** stop mapping uniswap_v4_hooks to the Uniswap V4 fallback ([01c35a4](https://github.com/propeller-heads/tycho/commit/01c35a49ab2cea0306b2212bc3e28489e7374623))
+* **execution:** suppress Slither zero-check on the optional Fluid address ([0f78bec](https://github.com/propeller-heads/tycho/commit/0f78bec56ad4f14f0f912d2b7126a7dfc65bf798))
+
+
+### Code Refactoring
+
+* **execution:** keep the per-chain fallback protocols in Rust ([6612c37](https://github.com/propeller-heads/tycho/commit/6612c37b8bacebfa8bab9b13dff36de9f53f0170))
+
 ## [0.413.0](https://github.com/propeller-heads/tycho/compare/0.412.0...0.413.0) (2026-09-21)
 
 
