@@ -83,7 +83,7 @@
     "propammfallback": { "contract": "PropAMMFallbackExecutor", "args": [] },
     "fallback": {
       "contract": "FallbackExecutor",
-      "args": ["<TYCHO_FALLBACK_ROUTER_ETHEREUM>"]
+      "args": ["0xA4bC389e87011fED8e902166bF421A29Fa6ef633"]
     },
     "rfq:metric": {
       "contract": "MetricExecutor",
@@ -141,7 +141,7 @@
     "lunarbase": { "contract": "LunarBaseExecutor", "args": [] },
     "fallback": {
       "contract": "FallbackExecutor",
-      "args": ["<TYCHO_FALLBACK_ROUTER_BASE>"]
+      "args": ["0xd38142E88f3d1011D8258737f257c709Dd0e2204"]
     },
     "rfq:metric": {
       "contract": "MetricExecutor",
