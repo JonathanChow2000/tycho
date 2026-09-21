@@ -507,6 +507,16 @@ impl ProtocolStreamBuilder {
         self
     }
 
+    /// Sets the number of deltas buffered for each underlying Tycho WebSocket subscription.
+    ///
+    /// See [`TychoStreamBuilder::subscription_buffer_size`].
+    pub fn subscription_buffer_size(mut self, subscription_buffer_size: usize) -> Self {
+        self.stream_builder = self
+            .stream_builder
+            .subscription_buffer_size(subscription_buffer_size);
+        self
+    }
+
     /// Exclude additional component IDs from all registered exchanges.
     ///
     /// These IDs are added to the shipped blocklist that is already applied by default (see
@@ -985,6 +995,44 @@ mod tests {
         let (_builder, controller) = builder.with_step_controller();
         // The controller was successfully returned — verifying the public API is callable.
         drop(controller);
+    }
+
+    #[tokio::test]
+    async fn test_subscription_buffer_size_forwards_zero_rejection() {
+        let error = ProtocolStreamBuilder::new("not a valid endpoint", Chain::Ethereum)
+            .subscription_buffer_size(0)
+            .build()
+            .await;
+
+        let Err(error) = error else {
+            panic!("a zero subscription buffer size must be rejected during setup");
+        };
+
+        assert!(
+            error
+                .to_string()
+                .contains("subscription buffer size must be greater than zero"),
+            "the underlying Tycho stream builder should return the configuration error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_subscription_buffer_size_forwards_upper_bound_rejection() {
+        let error = ProtocolStreamBuilder::new("not a valid endpoint", Chain::Ethereum)
+            .subscription_buffer_size(usize::MAX)
+            .build()
+            .await;
+
+        let Err(error) = error else {
+            panic!("an oversized subscription buffer size must be rejected during setup");
+        };
+
+        assert!(
+            error
+                .to_string()
+                .contains("subscription buffer size must not exceed"),
+            "the underlying Tycho stream builder should return the configuration error: {error}"
+        );
     }
 
     /// Connects to a live Tycho instance, verifies that the stream blocks until
