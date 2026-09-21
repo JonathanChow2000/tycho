@@ -4,18 +4,24 @@ const {deployCreate2} = require("./utils");
 
 // TychoFallbackRouter takes three per-chain singletons: Uniswap V4's PoolManager,
 // Fluid's liquidity layer and the Uniswap V3 static quoter. The first two come
-// from the chain's executor deployments, the quoter from `fallback_router` in
-// the protocol-specific config. A missing one is deployed as address(0): the
-// protocol reverts ProtocolUnavailable, or Uniswap V3 is quoted by simulation.
+// from the chain's executor deployments, the quoter from STATIC_QUOTERS below.
+// A missing one is deployed as address(0): the protocol reverts
+// ProtocolUnavailable, or Uniswap V3 is quoted by simulation.
 // `SUPPORTED_PROTOCOLS` in the Rust encoder must agree with what this deploys;
 // its tests check that against executor_deployments.json.
 //
 // Then deploy the FallbackExecutor with deploy-executors.js: add a `fallback`
 // entry with the printed address to executor_deployments.json.
 const executorDeployments = require("../../config/executor_deployments.json");
-const protocolSpecific = require("../../config/protocol_specific_addresses.json");
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+// Eden Network's Uniswap V3 static quoter, per chain:
+// https://github.com/eden-network/uniswap-v3-static-quoter#deployments
+const STATIC_QUOTERS = {
+    ethereum: "0xc80f61d1bdAbD8f5285117e1558fDDf8C64870FE",
+    base: "0x28aF629a9F3ECE3c8D9F0b7cCf6349708CeC8cFb",
+};
 
 async function main() {
     const network = hre.network.name;
@@ -31,9 +37,7 @@ async function main() {
     }
     const poolManager = deployments.uniswap_v4?.args?.[0] ?? ZERO_ADDRESS;
     const fluidLiquidity = deployments.fluid_v1?.args?.[0] ?? ZERO_ADDRESS;
-    const staticQuoter =
-        protocolSpecific[base]?.fallback_router?.uniswap_v3_static_quoter ??
-        ZERO_ADDRESS;
+    const staticQuoter = STATIC_QUOTERS[base] ?? ZERO_ADDRESS;
 
     console.log(`Deploying TychoFallbackRouter to ${network} with:`);
     console.log(

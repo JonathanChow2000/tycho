@@ -253,8 +253,8 @@ Constraints:
   needs a variant of the contract -- a protocol a chain needs is a new byte in the shared enum.
 - `scripts/deploy-fallback-router.js` deploys the contract through the CREATE2 factory, reading `poolManager` and
   `fluidLiquidity` from the chain's `uniswap_v4` and `fluid_v1` entries in `config/executor_deployments.json` and the
-  static quoter from `fallback_router.uniswap_v3_static_quoter` in `config/protocol_specific_addresses.json`, zeroing
-  whichever is missing. The `FallbackExecutor` then goes through `deploy-executors.js` like any executor: add a
+  static quoter from the script's own `STATIC_QUOTERS` map (Eden Network's deployments), zeroing whichever is
+  missing. The `FallbackExecutor` then goes through `deploy-executors.js` like any executor: add a
   `fallback` entry with the printed router address to `executor_deployments.json` and list `fallback` under the
   chain. Not deployed anywhere yet.
 - The contract holds no funds between transactions. A balance that does end up here (Curve rounding dust, a mistaken

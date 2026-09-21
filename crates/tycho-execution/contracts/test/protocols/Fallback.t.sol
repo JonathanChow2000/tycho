@@ -1193,7 +1193,7 @@ contract TychoFallbackRouterAerodromeTest is
     /// Uniswap V4's PoolManager on Base, from `executor_deployments.json`.
     address constant BASE_POOL_MANAGER =
         0x498581fF718922c3f8e6A244956aF099B2652b2b;
-    /// Eden's Uniswap V3 static quoter on Base, from `protocol_specific_addresses.json`.
+    /// Eden's Uniswap V3 static quoter on Base, from `deploy-fallback-router.js`.
     address constant BASE_STATIC_QUOTER =
         0x28aF629a9F3ECE3c8D9F0b7cCf6349708CeC8cFb;
 

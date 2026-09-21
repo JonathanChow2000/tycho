@@ -16,17 +16,11 @@
     },
     "rfq:native": {
       "router_v6": "0x4777A6B3A9A889ABfd4C7666Bdd2a7AB633293be"
-    },
-    "fallback_router": {
-      "uniswap_v3_static_quoter": "0xc80f61d1bdAbD8f5285117e1558fDDf8C64870FE"
     }
   },
   "base": {
     "rfq:native": {
       "router_v6": "0x9706D3fff42571305Fc201F996ADC0e768d72911"
-    },
-    "fallback_router": {
-      "uniswap_v3_static_quoter": "0x28aF629a9F3ECE3c8D9F0b7cCf6349708CeC8cFb"
     }
   },
   "arbitrum": {
