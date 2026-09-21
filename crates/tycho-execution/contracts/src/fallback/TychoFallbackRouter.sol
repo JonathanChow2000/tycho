@@ -54,11 +54,9 @@ error TychoFallbackRouter__UnknownProtocol(uint8 protocol);
 /// it delegatecalls `swap()`, so a reverting pAMM has already been paid and a Uniswap V3 retry,
 /// which pays in a callback, cannot be funded. Here the tokens stay in this contract.
 ///
-/// One build serves every chain. The per-chain singletons it calls (Uniswap V4's PoolManager,
-/// Fluid's liquidity layer, the Uniswap V3 static quoter) are constructor immutables that a chain
-/// without them deploys as `address(0)`: a protocol whose singleton is missing reverts
-/// `ProtocolUnavailable`, and Uniswap V3 without a quoter is quoted by simulation instead. Every
-/// other protocol is addressed per swap.
+/// One build serves every chain. The PoolManager, Fluid liquidity layer and Uniswap V3 static
+/// quoter are constructor immutables; a chain without one passes `address(0)`. Uniswap V4 and
+/// Fluid V1 then revert `ProtocolUnavailable`, and Uniswap V3 is quoted by simulation.
 ///
 /// Holds no funds between transactions. A balance that does end up here (Curve rounding dust, a
 /// mistaken transfer) is claimable by anyone through `swap` and is considered lost, which is also
@@ -282,8 +280,8 @@ contract TychoFallbackRouter is ReentrancyGuardTransient {
                     .balanceOf(swap_.receiver) - balanceBefore);
     }
 
-    /// @dev The amount a real run of the fallback delivers, taken off `simulateFallback`'s
-    /// revert. Costs the fallback's own gas, so it is only for protocols with no cheaper quote.
+    /// @dev Runs the fallback and reads the output off `simulateFallback`'s revert. Costs a full
+    /// swap, so only for protocols with no cheaper quote.
     function _quoteBySimulation(
         Swap calldata swap_,
         bytes calldata fallbackSwap
@@ -397,8 +395,7 @@ contract TychoFallbackRouter is ReentrancyGuardTransient {
         }
     }
 
-    /// @dev Rejects a protocol whose per-chain singleton this deployment lacks, so quoting it
-    /// counts as zero and running it reverts by name rather than calling `address(0)`.
+    /// @dev Reverts `ProtocolUnavailable` for a protocol whose singleton is `address(0)`.
     function _decodeFallback(bytes calldata fallbackSwap)
         internal
         view
@@ -579,9 +576,8 @@ contract TychoFallbackRouter is ReentrancyGuardTransient {
         zero2one = uint8(data[20]) > 0;
     }
 
-    /// @dev Solidly-style: the pool prices the trade itself, fee and stable curve included, so
-    /// the output comes from `getAmountOut` rather than the constant-fee V2 formula. Token order
-    /// is the address sort order, as for Uniswap V2.
+    /// @dev The pool prices the trade itself through `getAmountOut`, fee and stable curve
+    /// included. Token order is the address sort order.
     function _swapAerodromeV1(Swap calldata swap_, bytes calldata data)
         internal
     {

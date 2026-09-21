@@ -136,14 +136,8 @@ pub const UNISWAP_V2_FORKS: &[&str] =
 pub const UNISWAP_V3_FORKS: &[&str] =
     &["uniswap_v3", "pancakeswap_v3", "sushiswap_v3", "robinswap_v3"];
 
-/// Slipstream deployments and their forks share `SlipstreamsSwapEncoder`, which packs
-/// `tick_spacing` where `UniswapV3SwapEncoder` packs the fee. The pool keeps Uniswap V3's
-/// `swap(address,bool,int256,uint160,bytes)` and `uniswapV3SwapCallback`, so the executor and
-/// `TychoFallbackRouter` treat it as a V3 pool.
-///
-/// UP on Robinhood Chain deploys the Slipstream contracts verbatim with a dynamic fee module.
-/// Ramses V3 keys pools by tick spacing rather than fee, which is why it is encoded here; its
-/// executor is the standard Uniswap V3 one, which never reads the 3-byte slot.
+/// Slipstream deployments and forks. They share `SlipstreamsSwapEncoder`, which packs
+/// `tick_spacing` where `UniswapV3SwapEncoder` packs the fee. The pool ABI is Uniswap V3's.
 pub const SLIPSTREAMS_FORKS: &[&str] =
     &["aerodrome_slipstreams", "velodrome_slipstreams", "up_v3", "ramses_v3"];
 

@@ -2,23 +2,17 @@ require('dotenv').config();
 const hre = require("hardhat");
 const {deployCreate2} = require("./utils");
 
-// TychoFallbackRouter calls three per-chain singletons directly: the PoolManager
-// for the Uniswap V4 protocol, the Fluid liquidity layer for what dexCallback
-// pays, and the Uniswap V3 static quoter that prices a V3 fallback. The first
-// two already live in the executor config, keyed by protocol; the quoter is not
-// an executor argument, so it lives under `fallback_router` in the
-// protocol-specific config. A chain without one deploys with address(0) there:
-// the protocol then reverts TychoFallbackRouter__ProtocolUnavailable, or for
-// the quoter, Uniswap V3 fallbacks are quoted by simulation.
+// TychoFallbackRouter takes three per-chain singletons: Uniswap V4's PoolManager,
+// Fluid's liquidity layer and the Uniswap V3 static quoter. The first two come
+// from the chain's executor deployments, the quoter from `fallback_router` in
+// the protocol-specific config. A missing one is deployed as address(0): the
+// protocol reverts ProtocolUnavailable, or Uniswap V3 is quoted by simulation.
 //
-// fallback_protocols.json lists the protocols each chain's router runs; the
-// Rust encoder reads it to reject a protocol before it reverts on chain. This
-// script refuses to deploy a router that disagrees with it: a listed Uniswap V4
-// or Fluid V1 needs its singleton, and a found singleton needs its listing.
+// fallback_protocols.json lists the protocols each chain's router runs. This
+// script refuses to deploy when that list and the singletons disagree.
 //
-// The FallbackExecutor is deployed separately by deploy-executors.js: add a
-// `fallback` entry with the address this script prints to
-// executor_deployments.json, then list `fallback` under the chain there.
+// Then deploy the FallbackExecutor with deploy-executors.js: add a `fallback`
+// entry with the printed address to executor_deployments.json.
 const executorDeployments = require("../../config/executor_deployments.json");
 const protocolSpecific = require("../../config/protocol_specific_addresses.json");
 const fallbackProtocols = require("../../config/fallback_protocols.json");
