@@ -7,7 +7,7 @@
 //! and re-releases.
 
 use anyhow::{anyhow, Result};
-use substreams_ethereum::pb::eth::v2::{Block, TransactionTrace};
+use substreams_ethereum::pb::eth::v2::{Block, StorageChange, TransactionTrace};
 
 use crate::{
     constants::{TrackedProxy, EIP1967_IMPLEMENTATION_POSITION, TRACKED_PROXIES},
@@ -38,10 +38,13 @@ pub fn detect_upgrades<'a>(
 /// Uses the final implementation-slot write in execution order for each tracked proxy.
 fn upgrades_a_tracked_proxy(tx: &TransactionTrace, initial_state: &InitialState) -> Result<bool> {
     let mut installed: Vec<(&TrackedProxy, [u8; 20])> = Vec::new();
-    for change in ordered_storage_changes(tx) {
-        if change.key != EIP1967_IMPLEMENTATION_POSITION {
-            continue;
-        }
+    let is_a_tracked_implementation_slot = |change: &StorageChange| {
+        change.key == EIP1967_IMPLEMENTATION_POSITION &&
+            TRACKED_PROXIES
+                .iter()
+                .any(|proxy| change.address == proxy.proxy)
+    };
+    for change in ordered_storage_changes(tx, is_a_tracked_implementation_slot) {
         let Some(proxy) = TRACKED_PROXIES
             .iter()
             .find(|proxy| change.address == proxy.proxy)
@@ -139,6 +142,8 @@ pub(crate) mod fixtures {
 
 #[cfg(test)]
 mod tests {
+    use substreams_ethereum::pb::eth::v2::Call;
+
     use super::{fixtures::*, *};
 
     #[test]
@@ -252,14 +257,12 @@ mod tests {
         let block = block_with(vec![change], false);
         assert!(detect_upgrades(&block, &initial_state()).is_err());
     }
-}
 
-#[cfg(test)]
-mod review_regressions {
-    use super::{fixtures::*, *};
-    use substreams_ethereum::pb::eth::v2::Call;
+    /// A parent call that writes the slot, calls into a child that writes it again, and then
+    /// writes it once more resumes with the final value. Whichever implementation that last
+    /// write installs is the one the transaction ends on.
     #[test]
-    fn nested_upgrade_uses_the_last_executed_write() {
+    fn nested_calls_use_the_last_executed_write() {
         for (parent_implementation, child_implementation, expected_upgrades) in
             [(OTHER, RATE_LIMITER_V1, 1), (RATE_LIMITER_V1, OTHER, 0)]
         {
@@ -276,11 +279,13 @@ mod review_regressions {
                     storage_changes: vec![child_write],
                     ..Default::default()
                 });
+
+            let upgrades = detect_upgrades(&block, &initial_state()).expect("detect");
+
             assert_eq!(
-                detect_upgrades(&block, &initial_state())
-                    .unwrap()
-                    .len(),
-                expected_upgrades
+                upgrades.len(),
+                expected_upgrades,
+                "parent ends on {parent_implementation:02x?}"
             );
         }
     }

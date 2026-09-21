@@ -104,7 +104,12 @@ pub fn store_balance_slots(params: String, block: eth::v2::Block, store: StoreSe
 fn balance_store_writes(block: &eth::v2::Block) -> Vec<(u64, &'static str, BigInt)> {
     let mut writes = Vec::new();
     for tx in block.transactions() {
-        for storage_change in ordered_storage_changes(tx) {
+        let feeds_a_balance = |change: &eth::v2::StorageChange| {
+            tracked_slot(&change.address, &change.key)
+                .and_then(|slot| slot.balance_key)
+                .is_some()
+        };
+        for storage_change in ordered_storage_changes(tx, feeds_a_balance) {
             let Some(key) = tracked_slot(&storage_change.address, &storage_change.key)
                 .and_then(|slot| slot.balance_key)
             else {
@@ -242,7 +247,9 @@ fn handle_state_updates(
         let mut pool_balance_touched = false;
         let mut wrapper_balance_touched = false;
 
-        for storage_change in ordered_storage_changes(tx) {
+        let is_tracked =
+            |change: &eth::v2::StorageChange| tracked_slot(&change.address, &change.key).is_some();
+        for storage_change in ordered_storage_changes(tx, is_tracked) {
             let Some(tracked) = tracked_slot(&storage_change.address, &storage_change.key) else {
                 continue;
             };
@@ -362,14 +369,17 @@ fn decode_store_value(key: &str, bytes: &[u8]) -> BigInt {
 
 #[cfg(test)]
 mod tests {
-    use substreams_ethereum::pb::eth::v2::TransactionTraceStatus;
+    use substreams_ethereum::pb::eth::v2::{
+        Call, StorageChange, TransactionTrace, TransactionTraceStatus,
+    };
     use tycho_substreams::models::Attribute;
 
     use super::*;
     use crate::{
         constants::{
             EETH_TOTAL_SHARES_POSITION, ETH_REDEMPTION_INFO_POSITION, ETH_REDEMPTION_INFO_SLOT,
-            LIQUIDITY_POOL_ADDRESS, LIQUIDITY_POOL_VALUE_POSITION, REDEMPTION_MANAGER_ADDRESS,
+            EXIT_FEE_BPS_ATTR, LIQUIDITY_POOL_ADDRESS, LIQUIDITY_POOL_VALUE_POSITION,
+            REDEMPTION_MANAGER_ADDRESS,
         },
         upgrades::fixtures::{
             block_with, initial_state, rate_limiter_upgrade_to, OTHER, RATE_LIMITER_V1,
@@ -679,17 +689,9 @@ mod tests {
     fn a_non_utf8_store_value_panics() {
         decode_store_value(TOTAL_SHARES_KEY, &[0xff, 0xfe]);
     }
-}
 
-#[cfg(test)]
-mod review_regressions {
-    use super::*;
-    use crate::constants::{
-        EETH_TOTAL_SHARES_POSITION, ETH_REDEMPTION_INFO_POSITION, REDEMPTION_MANAGER_ADDRESS,
-    };
-    use substreams_ethereum::pb::eth::v2::{
-        Call, StorageChange, TransactionTrace, TransactionTraceStatus,
-    };
+    /// One transaction whose parent call writes `key` before and after a child call. The trace
+    /// lists the parent's two writes together, so ordinal order is the only execution order.
     fn nested_writes(address: [u8; 20], key: [u8; 32]) -> eth::v2::Block {
         let write = |ordinal, value| StorageChange {
             address: address.to_vec(),
@@ -702,7 +704,6 @@ mod review_regressions {
             transaction_traces: vec![TransactionTrace {
                 index: 3,
                 status: TransactionTraceStatus::Succeeded as i32,
-                // The parent resumes after the child and writes the final value.
                 calls: vec![
                     Call {
                         index: 1,
@@ -721,38 +722,39 @@ mod review_regressions {
             ..Default::default()
         }
     }
+
+    /// The attribute a transaction leaves is the value of its last write in execution order,
+    /// which is the parent's second write, not the child's.
     #[test]
     fn nested_calls_emit_the_last_executed_attribute_write() {
         let block = nested_writes(REDEMPTION_MANAGER_ADDRESS, ETH_REDEMPTION_INFO_POSITION);
-        let mut updates = HashMap::new();
-        handle_state_updates(
-            &block,
-            &StoreDeltas::default(),
-            &StoreGetBigInt::new(0),
-            &mut updates,
-        );
+
+        let mut updates = updates_for(&block);
+
         let changes = updates
             .remove(&3)
-            .unwrap()
+            .expect("changes on the writing transaction")
             .build()
-            .unwrap();
+            .expect("the writes are a change");
         let fee = changes.entity_changes[0]
             .attributes
             .iter()
-            .find(|a| a.name == "exit_fee_bps")
-            .unwrap();
+            .find(|attribute| attribute.name == EXIT_FEE_BPS_ATTR)
+            .expect("the fee attribute");
         assert_eq!(BigInt::from_unsigned_bytes_be(&fee.value), BigInt::from(0x0303u32));
     }
+
+    /// The store replays writes in the order they are set, so the balance store has to receive
+    /// them in execution order for the last one to win.
     #[test]
     fn nested_calls_write_balance_store_in_execution_order() {
         let block = nested_writes(EETH_ADDRESS, EETH_TOTAL_SHARES_POSITION);
-        let writes = balance_store_writes(&block);
-        assert_eq!(
-            writes
-                .iter()
-                .map(|(ordinal, _, _)| *ordinal)
-                .collect::<Vec<_>>(),
-            vec![10, 20, 30]
-        );
+
+        let ordinals: Vec<u64> = balance_store_writes(&block)
+            .iter()
+            .map(|(ordinal, _, _)| *ordinal)
+            .collect();
+
+        assert_eq!(ordinals, vec![10, 20, 30]);
     }
 }

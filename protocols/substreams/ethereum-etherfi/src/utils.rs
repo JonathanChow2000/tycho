@@ -13,13 +13,24 @@ pub fn bytes_from_hex(value: &str) -> Result<Vec<u8>> {
     hex::decode(value).map_err(|e| anyhow!("Failed to decode hex value: {e}"))
 }
 
-/// Successful writes sorted by execution ordinal, including parent writes after child calls.
-pub fn ordered_storage_changes(tx: &TransactionTrace) -> Vec<&StorageChange> {
+/// The storage writes in `tx` that `keep` selects, from calls the chain kept, in execution
+/// order.
+///
+/// The trace lists each call's writes together, so a parent's writes made after a child call
+/// come before the child's. The store engine replays writes in the order they are set, so a
+/// later write to the same key has to be set later: sorting by ordinal is what makes that hold.
+/// Only the kept writes are sorted; a transaction can carry thousands and the callers want a
+/// handful.
+pub fn ordered_storage_changes(
+    tx: &TransactionTrace,
+    keep: impl Fn(&StorageChange) -> bool,
+) -> Vec<&StorageChange> {
     let mut changes: Vec<_> = tx
         .calls
         .iter()
         .filter(|call| !call.state_reverted)
         .flat_map(|call| call.storage_changes.iter())
+        .filter(|change| keep(change))
         .collect();
     changes.sort_unstable_by_key(|change| change.ordinal);
     changes
