@@ -1,3 +1,25 @@
+## [0.411.0](https://github.com/propeller-heads/tycho/compare/0.410.0...0.411.0) (2026-09-21)
+
+
+### Features
+
+* add ethereum-etherfi substreams package ([e839374](https://github.com/propeller-heads/tycho/commit/e8393749c4a3650395bbf08be7054a1401cd9bf0))
+* add etherfi substreams and fix its simulation ([#1427](https://github.com/propeller-heads/tycho/issues/1427)) ([a836a00](https://github.com/propeller-heads/tycho/commit/a836a00756e5ea5b61b89bff516a49a93949c5f0))
+* **etherfi:** model the contracts live since the escrow migration ([2da5d84](https://github.com/propeller-heads/tycho/commit/2da5d84c3db5ef1aab15d7573a1fc801eff2fe2f))
+* **etherfi:** pause both components when a tracked proxy is upgraded ([6dab164](https://github.com/propeller-heads/tycho/commit/6dab1642fbdad17279bd19606198b7a6bf0b4e53))
+* **etherfi:** seed components from a params snapshot at the start block ([fb8c84d](https://github.com/propeller-heads/tycho/commit/fb8c84de63b27c150535cab44cfc09a107208e80))
+
+
+### Bug Fixes
+
+* **etherfi:** correct burn accounting and storage write ordering ([8167ed0](https://github.com/propeller-heads/tycho/commit/8167ed0ae1263c598c2264e213d0d5e72e92c3d8))
+* **etherfi:** make the redemption limit quotable and guard its inputs ([92b9c1a](https://github.com/propeller-heads/tycho/commit/92b9c1a777c5600451de04cc0cdf743366a8ac33))
+* **etherfi:** pause on the implementation a transaction ends on, and cover the filters ([c1af497](https://github.com/propeller-heads/tycho/commit/c1af497d9ddac677e115ccf37b8d002cc034a73f))
+* **etherfi:** report native ETH as 0x00..00, not the router sentinel ([4097aa1](https://github.com/propeller-heads/tycho/commit/4097aa132f10f0502a7c3e7b0e3fb85a8c7031a2))
+* **testing:** plant fixture stubs only at listed addresses ([dac9569](https://github.com/propeller-heads/tycho/commit/dac956970bc9232ebae049b529cd0ef8a7bae2ea))
+* **tycho-simulation:** bound etherfi redemption limit by redeemable liquidity ([e7c1236](https://github.com/propeller-heads/tycho/commit/e7c123616d334659d46110d8c1929f73cc568a45))
+* **tycho-simulation:** correct etherfi share math and limits ([be93d55](https://github.com/propeller-heads/tycho/commit/be93d55ffd8111513fca76e19cb09a7b3f17ccf8))
+
 ## [0.410.0](https://github.com/propeller-heads/tycho/compare/0.409.0...0.410.0) (2026-09-18)
 
 
