@@ -184,11 +184,14 @@ impl FallbackProtocol {
 
     /// Whether `chain`'s `TychoFallbackRouter` can run this protocol.
     ///
-    /// A protocol with a `required_executor` calls a per-chain singleton the router takes as a
-    /// constructor immutable, and a chain without that executor deploys the router with
-    /// `address(0)` there, which makes the protocol revert
-    /// `TychoFallbackRouter__ProtocolUnavailable`. Every other protocol takes its pool from the
-    /// swap, so the router runs it on every chain and this returns `true`.
+    /// This asks the deployment, not the liquidity. A protocol with a `required_executor` calls a
+    /// per-chain singleton the router takes as a constructor immutable, and a chain without that
+    /// executor deploys the router with `address(0)` there, which makes the protocol revert
+    /// `TychoFallbackRouter__ProtocolUnavailable`. Every other protocol takes its pool address
+    /// from the swap, so one router build runs it on every chain and this returns `true`
+    /// everywhere — for Aerodrome V1 too, whose pools are on Base. Which chains have a protocol's
+    /// pools is the component stream's answer: off Base it streams no Aerodrome V1 component, so
+    /// no solver names one as a fallback.
     pub fn supported_on(self, chain: Chain) -> bool {
         let Some(executor) = self.info().required_executor else {
             return true;
@@ -658,7 +661,9 @@ mod tests {
         assert!(FallbackProtocol::UniswapV4.supported_on(Chain::Base));
         assert!(!FallbackProtocol::UniswapV4.supported_on(Chain::Plasma));
         assert!(FallbackProtocol::FluidV1.supported_on(Chain::Plasma));
-        // Per-swap protocols need nothing from the deployment.
+        // A protocol addressed per swap needs nothing from the deployment, so every chain
+        // supports it — Aerodrome V1 off Base too, where the component stream simply offers no
+        // Aerodrome V1 pool to name.
         for chain in [Chain::Base, Chain::Plasma, Chain::Unichain] {
             assert!(FallbackProtocol::UniswapV3.supported_on(chain), "{chain}");
             assert!(FallbackProtocol::AerodromeV1.supported_on(chain), "{chain}");

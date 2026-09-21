@@ -407,6 +407,11 @@ singletons on -- and `user_data_name` is the tag to write. The encoder rejects a
 chain's deployment cannot run with an `InvalidInput` error instead of letting it revert on
 chain.
 
+`supported_on` asks the deployment, not the liquidity. A protocol addressed per swap -- Uniswap
+V2/V3, Curve, Aerodrome V1 -- needs nothing from the router's constructor, so it is supported on
+every chain, Aerodrome V1 included even though its pools are on Base. Which chains have a
+protocol's pools is the component stream's answer, not the router's.
+
 The `PROTOCOLS` table in `fallback.rs` holds one row per protocol -- its `user_data_name`, the
 protocol systems and fork lists that resolve to it, and the executor its per-chain singleton comes
 from -- and the three methods above read that table, so adding a fallback protocol means adding a
