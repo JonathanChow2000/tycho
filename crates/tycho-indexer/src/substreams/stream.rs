@@ -86,8 +86,8 @@ fn retry_delays() -> impl Iterator<Item = Duration> {
 }
 
 /// Consecutive `Unauthenticated` retries allowed once the endpoint has proven the credential by
-/// delivering a block. With [`retry_delays`] these span about three minutes.
-const MAX_UNAUTHENTICATED_RETRIES: u32 = 13;
+/// delivering a block. With [`retry_delays`] these span about two and a half minutes.
+const MAX_UNAUTHENTICATED_RETRIES: u32 = 12;
 
 /// Whether an `Unauthenticated` status from the endpoint should be retried.
 ///
@@ -488,14 +488,14 @@ mod tests {
     }
 
     #[test]
-    fn test_unauthenticated_retries_still_span_about_three_minutes() {
+    fn test_unauthenticated_retries_span_about_two_and_a_half_minutes() {
         let total: Duration = retry_delays()
             .take(MAX_UNAUTHENTICATED_RETRIES as usize)
             .sum();
 
         assert!(
-            (Duration::from_secs(150)..=Duration::from_secs(210)).contains(&total),
-            "the documented ~3 minute window is now {total:?}"
+            (Duration::from_secs(120)..=Duration::from_secs(165)).contains(&total),
+            "the documented ~2.5 minute window is now {total:?}"
         );
     }
 }
