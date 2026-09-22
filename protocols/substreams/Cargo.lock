@@ -1319,7 +1319,7 @@ dependencies = [
 
 [[package]]
 name = "ethereum-uniswap-v2"
-version = "0.3.4"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "ethabi 18.0.0",
