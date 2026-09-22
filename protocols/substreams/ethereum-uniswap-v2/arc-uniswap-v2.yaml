@@ -1,6 +1,6 @@
 specVersion: v0.1.0
 package:
-  name: "bsc_uniswap_v2"
+  name: "arc_uniswap_v2"
   version: v0.3.4
   url: "https://github.com/propeller-heads/tycho-protocol-sdk/tree/main/substreams/ethereum-uniswap-v2"
 
@@ -20,7 +20,7 @@ binaries:
 modules:
   - name: map_pools_created
     kind: map
-    initialBlock: 33496018
+    initialBlock: 1948011 # UniswapV2Factory creation block
     inputs:
       - params: string
       - source: sf.ethereum.type.v2.Block
@@ -29,7 +29,7 @@ modules:
 
   - name: store_pools
     kind: store
-    initialBlock: 33496018
+    initialBlock: 1948011
     updatePolicy: set_if_not_exists
     valueType: proto:tycho.evm.uniswap.v2.Pool
     inputs:
@@ -37,7 +37,7 @@ modules:
 
   - name: map_pool_events
     kind: map
-    initialBlock: 33496018
+    initialBlock: 1948011
     inputs:
       - source: sf.ethereum.type.v2.Block
       - map: map_pools_created
@@ -46,4 +46,4 @@ modules:
       type: proto:tycho.evm.v1.BlockChanges
 
 params:
-  map_pools_created: factory_address=8909Dc15e40173Ff4699343b6eB8132c65e18eC6&protocol_type_name=uniswap_v2_pool
+  map_pools_created: factory_address=89e5DB8B5aA49aA85AC63f691524311AEB649eba&protocol_type_name=uniswap_v2_pool

@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.4
+
+- Add the Arc Uniswap V2 manifest, with an integration test.
+
 ## v0.3.3
 
 - Add the Base SushiSwap V2 manifest, with an integration test.
