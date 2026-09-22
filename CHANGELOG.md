@@ -1,3 +1,11 @@
+## [0.417.0](https://github.com/propeller-heads/tycho/compare/0.416.0...0.417.0) (2026-09-22)
+
+
+### Features
+
+* **testing:** support Arc Substreams integration ([7474bdb](https://github.com/propeller-heads/tycho/commit/7474bdbb01b12165b40bf71b1f295b4fe312fe0b))
+* **testing:** support Arc Substreams integration ([#1480](https://github.com/propeller-heads/tycho/issues/1480)) ([6a77465](https://github.com/propeller-heads/tycho/commit/6a7746515fbb8f5245299ad11dca64a64bec8ec3))
+
 ## [0.416.0](https://github.com/propeller-heads/tycho/compare/0.415.1...0.416.0) (2026-09-22)
 
 
