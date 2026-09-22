@@ -9,6 +9,7 @@ use thiserror::Error;
 use tokio::{
     sync::{mpsc::Receiver, Semaphore},
     task::JoinHandle,
+    time::timeout,
 };
 use tracing::{info, warn};
 use tycho_common::{
@@ -21,10 +22,11 @@ use tycho_common::{
 
 use crate::{
     client_metadata::serialize_client_metadata,
-    deltas::{DeltasClient, DEFAULT_RECONNECTING_SUBSCRIPTION_BUFFER_SIZE},
+    deltas::{DeltasClient, DeltasError, DEFAULT_RECONNECTING_SUBSCRIPTION_BUFFER_SIZE},
     feed::{
-        component_tracker::ComponentFilter, synchronizer::ProtocolStateSynchronizer, BlockHeader,
-        BlockSynchronizer, BlockSynchronizerError, FeedMessage,
+        component_tracker::ComponentFilter,
+        synchronizer::{ProtocolStateSynchronizer, StateSynchronizer},
+        BlockHeader, BlockSynchronizer, BlockSynchronizerError, FeedMessage,
     },
     rpc::{HttpRPCClientOptions, ProtocolSystemsParams, RPCClient},
     HttpRPCClient, WsDeltasClient,
@@ -410,10 +412,6 @@ impl TychoStreamBuilder {
                 .with_client_metadata_header(metadata_header),
         )
         .map_err(|e| StreamError::SetUpError(e.to_string()))?;
-        let ws_jh = ws_client
-            .connect()
-            .await
-            .map_err(|e| StreamError::WebSocketConnectionError(e.to_string()))?;
 
         // Create and configure the BlockSynchronizer
         let mut block_sync = BlockSynchronizer::new(
@@ -466,11 +464,33 @@ impl TychoStreamBuilder {
             block_sync = block_sync.register_synchronizer(id, sync);
         }
 
-        // Start the BlockSynchronizer and monitor for disconnections
-        let (sync_jh, rx) = block_sync
-            .run()
+        let ws_jh = ws_client
+            .connect()
             .await
-            .map_err(|e| StreamError::BlockSynchronizerError(e.to_string()))?;
+            .map_err(|e| StreamError::WebSocketConnectionError(e.to_string()))?;
+
+        Self::start_stream(ws_client, ws_jh, block_sync).await
+    }
+
+    /// Starts `block_sync` over the connected `ws_client` and spawns the task that monitors both.
+    ///
+    /// Returns the monitor task and the feed receiver. When the block synchronizer fails to
+    /// start, the websocket is closed before the error is returned.
+    async fn start_stream<S: StateSynchronizer>(
+        ws_client: WsDeltasClient,
+        ws_jh: JoinHandle<Result<(), DeltasError>>,
+        block_sync: BlockSynchronizer<S>,
+    ) -> Result<
+        (JoinHandle<()>, Receiver<Result<FeedMessage<BlockHeader>, BlockSynchronizerError>>),
+        StreamError,
+    > {
+        let (sync_jh, rx) = match block_sync.run().await {
+            Ok(started) => started,
+            Err(e) => {
+                Self::close_websocket(&ws_client, ws_jh).await;
+                return Err(StreamError::BlockSynchronizerError(e.to_string()));
+            }
+        };
 
         // Monitor WebSocket and BlockSynchronizer futures
         let handle = tokio::spawn(async move {
@@ -488,6 +508,27 @@ impl TychoStreamBuilder {
         });
 
         Ok((handle, rx))
+    }
+
+    /// Closes the websocket and waits for its task to end.
+    ///
+    /// The task only reads the close command while it is connected. One that is between
+    /// reconnection attempts is aborted instead, so it cannot open another connection after the
+    /// caller has given up on it.
+    async fn close_websocket(
+        ws_client: &WsDeltasClient,
+        mut ws_jh: JoinHandle<Result<(), DeltasError>>,
+    ) {
+        if let Err(e) = ws_client.close().await {
+            warn!(?e, "Failed to close WebSocket client");
+        }
+        if timeout(Duration::from_secs(1), &mut ws_jh)
+            .await
+            .is_err()
+        {
+            warn!("WebSocket task did not stop after close; aborting it");
+            ws_jh.abort();
+        }
     }
 }
 
@@ -588,7 +629,65 @@ impl ProtocolSystemsInfo {
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
+
+    use futures03::StreamExt;
+    use tokio::{net::TcpListener, sync::oneshot};
+
     use super::*;
+
+    /// Accepts one websocket connection and reports when the client closes it.
+    async fn mock_ws_reporting_close() -> (SocketAddr, oneshot::Receiver<()>) {
+        let server = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("localhost bind failed");
+        let addr = server.local_addr().unwrap();
+        let (closed_tx, closed_rx) = oneshot::channel();
+
+        tokio::spawn(async move {
+            let (stream, _) = server
+                .accept()
+                .await
+                .expect("accept failed");
+            let mut websocket = tokio_tungstenite::accept_async(stream)
+                .await
+                .expect("websocket handshake failed");
+            loop {
+                match websocket.next().await {
+                    Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_))) |
+                    Some(Err(_)) |
+                    None => break,
+                    Some(Ok(_)) => {}
+                }
+            }
+            let _ = closed_tx.send(());
+        });
+        (addr, closed_rx)
+    }
+
+    /// A build that connects the websocket and then fails to start the block synchronizer must
+    /// close that websocket. Nothing else can reach it once `build` has returned.
+    #[tokio::test]
+    async fn test_failed_start_closes_the_websocket() {
+        let (addr, closed_rx) = mock_ws_reporting_close().await;
+        let ws_client = WsDeltasClient::new(&format!("ws://{addr}"), None).unwrap();
+        let ws_jh = ws_client
+            .connect()
+            .await
+            .expect("connect failed");
+        // No synchronizers registered: `run` fails right away, after the websocket is connected.
+        let block_sync: BlockSynchronizer<
+            ProtocolStateSynchronizer<HttpRPCClient, WsDeltasClient>,
+        > = BlockSynchronizer::new(Duration::from_secs(1), Duration::from_secs(1), 1);
+
+        let res = TychoStreamBuilder::start_stream(ws_client, ws_jh, block_sync).await;
+
+        assert!(matches!(res, Err(StreamError::BlockSynchronizerError(_))), "got {res:?}");
+        timeout(Duration::from_secs(2), closed_rx)
+            .await
+            .expect("server should observe the websocket closing")
+            .expect("mock server exited without reporting");
+    }
 
     #[test]
     fn test_validate_chain_config_errors_on_broken_file() {
