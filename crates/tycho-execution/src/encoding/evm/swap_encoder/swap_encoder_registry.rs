@@ -269,18 +269,17 @@ mod tests {
             .is_none());
     }
 
-    /// The TychoFallbackRouter family resolves like the other two pAMM families, against its own
-    /// encoder. No `fallback` entry ships in the executor configs until the FallbackExecutor is
-    /// deployed, so the test registers the family key itself.
+    /// The TychoFallbackRouter family resolves like the price-level-stream family: the single
+    /// `fallback` config entry serves the bare key and every `fallback:{protocol}` protocol,
+    /// against the `FallbackExecutor` address.
     #[test]
     fn test_fallback_protocol_resolution() {
-        let executor_address =
-            Bytes::from_str("0x5c2f5a71f67c01775180adc06909288b4c329308").unwrap();
-        let registry = SwapEncoderRegistry::new(Chain::Ethereum);
-        let encoder = registry
-            .create_encoder(FALLBACK_KEY, executor_address.clone(), None)
+        let executors = std::fs::read_to_string("config/test_executor_addresses.json").unwrap();
+        let registry = SwapEncoderRegistry::new(Chain::Ethereum)
+            .add_default_encoders(Some(executors))
             .unwrap();
-        let registry = registry.register_encoder(FALLBACK_KEY, encoder);
+        let executor_address =
+            Bytes::from_str("0x89CA9F4f77B267778EB2eA0Ba1bEAdEe8523af36").unwrap();
 
         for protocol in [
             FALLBACK_KEY,
