@@ -1,3 +1,16 @@
+## [0.418.0](https://github.com/propeller-heads/tycho/compare/0.417.0...0.418.0) (2026-09-22)
+
+
+### Features
+
+* **substreams:** add Arc Uniswap V2 package ([842284b](https://github.com/propeller-heads/tycho/commit/842284b042d01ed7087463a02dd1d2938b3d9a83))
+* **substreams:** add Arc Uniswap V2 package ([#1481](https://github.com/propeller-heads/tycho/issues/1481)) ([bbe6297](https://github.com/propeller-heads/tycho/commit/bbe6297fd5c0cce00d2171d2dffbbf85ad34b05f))
+
+
+### Bug Fixes
+
+* **substreams:** keep manifest-only package version ([bff903b](https://github.com/propeller-heads/tycho/commit/bff903b15811cd20c4e55c036d643f390f5bef28))
+
 ## [0.417.0](https://github.com/propeller-heads/tycho/compare/0.416.0...0.417.0) (2026-09-22)
 
 
