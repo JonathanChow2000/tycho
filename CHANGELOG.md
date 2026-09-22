@@ -1,3 +1,11 @@
+## [0.415.1](https://github.com/propeller-heads/tycho/compare/0.415.0...0.415.1) (2026-09-22)
+
+
+### Bug Fixes
+
+* **indexer:** shorten substreams reconnect delays ([014bf28](https://github.com/propeller-heads/tycho/commit/014bf288b00c02c9d08378421251ffc25f718568))
+* **indexer:** shorten substreams reconnect delays ([#1471](https://github.com/propeller-heads/tycho/issues/1471)) ([8f9d54f](https://github.com/propeller-heads/tycho/commit/8f9d54f1bc28b44638338f55efea88b426df840b))
+
 ## [0.415.0](https://github.com/propeller-heads/tycho/compare/0.414.0...0.415.0) (2026-09-21)
 
 
