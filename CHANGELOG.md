@@ -1,3 +1,11 @@
+## [0.421.0](https://github.com/propeller-heads/tycho/compare/0.420.0...0.421.0) (2026-09-23)
+
+
+### Features
+
+* **execution:** expose FallbackSwapData for building fallback user_data ([ddaa045](https://github.com/propeller-heads/tycho/commit/ddaa0454ed8cfb7a4546f04d6b1a04f6e3d710c4))
+* **execution:** expose FallbackSwapData for building fallback user_data ([#1483](https://github.com/propeller-heads/tycho/issues/1483)) ([35a1f18](https://github.com/propeller-heads/tycho/commit/35a1f1878e76b01a7cb4ea59bf6c28bd14649736))
+
 ## [0.420.0](https://github.com/propeller-heads/tycho/compare/0.419.0...0.420.0) (2026-09-23)
 
 
