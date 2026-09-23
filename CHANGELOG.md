@@ -1,3 +1,10 @@
+## [0.422.0](https://github.com/propeller-heads/tycho/compare/0.421.1...0.422.0) (2026-09-23)
+
+
+### Features
+
+* **execution:** update Hashflow executor address ([#1478](https://github.com/propeller-heads/tycho/issues/1478)) ([43e3103](https://github.com/propeller-heads/tycho/commit/43e31033ed438b6c17bd53f916d2a8e6b5af068d))
+
 ## [0.421.1](https://github.com/propeller-heads/tycho/compare/0.421.0...0.421.1) (2026-09-23)
 
 
