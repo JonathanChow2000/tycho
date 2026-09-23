@@ -1,3 +1,70 @@
+## [0.421.0](https://github.com/propeller-heads/tycho/compare/0.420.0...0.421.0) (2026-09-23)
+
+
+### Features
+
+* **execution:** expose FallbackSwapData for building fallback user_data ([ddaa045](https://github.com/propeller-heads/tycho/commit/ddaa0454ed8cfb7a4546f04d6b1a04f6e3d710c4))
+* **execution:** expose FallbackSwapData for building fallback user_data ([#1483](https://github.com/propeller-heads/tycho/issues/1483)) ([35a1f18](https://github.com/propeller-heads/tycho/commit/35a1f1878e76b01a7cb4ea59bf6c28bd14649736))
+
+## [0.420.0](https://github.com/propeller-heads/tycho/compare/0.419.0...0.420.0) (2026-09-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* activate the TychoFallbackRouter (#1473)
+* **execution:** remove the PropAMMRouter fallback path
+* **simulation:** emit pAMM components under the fallback family
+
+### Features
+
+* activate the TychoFallbackRouter ([#1473](https://github.com/propeller-heads/tycho/issues/1473)) ([6dcc1bd](https://github.com/propeller-heads/tycho/commit/6dcc1bd2d3530611eefaa143b172aa692a443c7d))
+* **execution:** configure the FallbackExecutor deployment ([180149c](https://github.com/propeller-heads/tycho/commit/180149cfa4578c69046b057bf1593bce5eaecf91))
+* **execution:** register the FallbackExecutor on Ethereum and Base ([68c1d91](https://github.com/propeller-heads/tycho/commit/68c1d91d6fffaca29cfd7038f49d243b9ebf5a8e))
+* **simulation:** emit pAMM components under the fallback family ([7738c60](https://github.com/propeller-heads/tycho/commit/7738c60d4ff2be28e9d2a2242e0ab9f1506bb563))
+
+
+### Code Refactoring
+
+* **execution:** remove the PropAMMRouter fallback path ([8e93337](https://github.com/propeller-heads/tycho/commit/8e933373a4a8acbec97d98d77a5406a4627c149a))
+
+## [0.419.0](https://github.com/propeller-heads/tycho/compare/0.418.0...0.419.0) (2026-09-23)
+
+
+### Features
+
+* **execution:** record the deployed lido_v4 and etherfi executors ([4b9c5d2](https://github.com/propeller-heads/tycho/commit/4b9c5d2140d498b7529484f6a9351f651bb01ee4))
+* **integration-test:** quote lido_v4 and etherfi in the cluster test ([a4267ca](https://github.com/propeller-heads/tycho/commit/a4267ca1e58e6da78204247321566d510272d45a)), closes [#929](https://github.com/propeller-heads/tycho/issues/929) [#1427](https://github.com/propeller-heads/tycho/issues/1427)
+* wire lido_v4 and etherfi into the cluster test and the executor registry ([#1475](https://github.com/propeller-heads/tycho/issues/1475)) ([9be2563](https://github.com/propeller-heads/tycho/commit/9be2563af8b27d5fdbb3791d965f416470e4539d))
+
+## [0.418.0](https://github.com/propeller-heads/tycho/compare/0.417.0...0.418.0) (2026-09-22)
+
+
+### Features
+
+* **substreams:** add Arc Uniswap V2 package ([842284b](https://github.com/propeller-heads/tycho/commit/842284b042d01ed7087463a02dd1d2938b3d9a83))
+* **substreams:** add Arc Uniswap V2 package ([#1481](https://github.com/propeller-heads/tycho/issues/1481)) ([bbe6297](https://github.com/propeller-heads/tycho/commit/bbe6297fd5c0cce00d2171d2dffbbf85ad34b05f))
+
+
+### Bug Fixes
+
+* **substreams:** keep manifest-only package version ([bff903b](https://github.com/propeller-heads/tycho/commit/bff903b15811cd20c4e55c036d643f390f5bef28))
+
+## [0.417.0](https://github.com/propeller-heads/tycho/compare/0.416.0...0.417.0) (2026-09-22)
+
+
+### Features
+
+* **testing:** support Arc Substreams integration ([7474bdb](https://github.com/propeller-heads/tycho/commit/7474bdbb01b12165b40bf71b1f295b4fe312fe0b))
+* **testing:** support Arc Substreams integration ([#1480](https://github.com/propeller-heads/tycho/issues/1480)) ([6a77465](https://github.com/propeller-heads/tycho/commit/6a7746515fbb8f5245299ad11dca64a64bec8ec3))
+
+## [0.416.0](https://github.com/propeller-heads/tycho/compare/0.415.1...0.416.0) (2026-09-22)
+
+
+### Features
+
+* tune Arc client timing ([88d0051](https://github.com/propeller-heads/tycho/commit/88d00513eea3a50d4a7e54b7b37178c953b7aa0b))
+* tune Arc client timing ([#1468](https://github.com/propeller-heads/tycho/issues/1468)) ([3180320](https://github.com/propeller-heads/tycho/commit/31803204391c235c3d636da9b1393b4417449726))
+
 ## [0.415.1](https://github.com/propeller-heads/tycho/compare/0.415.0...0.415.1) (2026-09-22)
 
 
