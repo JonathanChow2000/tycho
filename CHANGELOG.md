@@ -1,3 +1,12 @@
+## [0.419.0](https://github.com/propeller-heads/tycho/compare/0.418.0...0.419.0) (2026-09-23)
+
+
+### Features
+
+* **execution:** record the deployed lido_v4 and etherfi executors ([4b9c5d2](https://github.com/propeller-heads/tycho/commit/4b9c5d2140d498b7529484f6a9351f651bb01ee4))
+* **integration-test:** quote lido_v4 and etherfi in the cluster test ([a4267ca](https://github.com/propeller-heads/tycho/commit/a4267ca1e58e6da78204247321566d510272d45a)), closes [#929](https://github.com/propeller-heads/tycho/issues/929) [#1427](https://github.com/propeller-heads/tycho/issues/1427)
+* wire lido_v4 and etherfi into the cluster test and the executor registry ([#1475](https://github.com/propeller-heads/tycho/issues/1475)) ([9be2563](https://github.com/propeller-heads/tycho/commit/9be2563af8b27d5fdbb3791d965f416470e4539d))
+
 ## [0.418.0](https://github.com/propeller-heads/tycho/compare/0.417.0...0.418.0) (2026-09-22)
 
 
