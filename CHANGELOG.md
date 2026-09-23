@@ -1,3 +1,11 @@
+## [0.422.1](https://github.com/propeller-heads/tycho/compare/0.422.0...0.422.1) (2026-09-23)
+
+
+### Bug Fixes
+
+* **simulation:** forward snapshot entrypoints to pending indexers ([8b490ca](https://github.com/propeller-heads/tycho/commit/8b490ca9edaefa1745a7353bf65ab88a4f42ee5e))
+* **simulation:** forward snapshot entrypoints to pending indexers ([#1482](https://github.com/propeller-heads/tycho/issues/1482)) ([204a026](https://github.com/propeller-heads/tycho/commit/204a026d3e002061213a76f14b1aec63252d1e8b))
+
 ## [0.422.0](https://github.com/propeller-heads/tycho/compare/0.421.1...0.422.0) (2026-09-23)
 
 
