@@ -394,9 +394,12 @@ static attribute. The public `FallbackProtocol` enum (`swap_encoder::FallbackPro
 list other projects import: `from_protocol_system` maps a Tycho protocol name to the variant it
 encodes as (`UNISWAP_V2_FORKS`, `UNISWAP_V3_FORKS` and the Slipstreams deployments resolve to
 their base variant, `vm:curve` to Curve), `supported_on(chain)` says whether the chain's
-`TychoFallbackRouter` runs it, and `user_data_name` is the tag to write. The
-encoder rejects a protocol the chain's router does not run with an `InvalidInput` error instead
-of letting it revert on chain.
+`TychoFallbackRouter` runs it, and `user_data_name` is the tag to write. `FallbackSwapData`
+(`swap_encoder::FallbackSwapData`) is public too, one variant per protocol with the pool
+parameters the contract decodes: a solver builds the variant for the pool it picked and
+`serde_json` serializes it into the `user_data` the encoder reads back, so the JSON shape is
+defined once. The encoder rejects a protocol the chain's router does not run with an
+`InvalidInput` error instead of letting it revert on chain.
 
 `SUPPORTED_PROTOCOLS` in `fallback.rs` lists the fallback protocols per chain, and `supported_on`
 reads it. A chain lists a protocol when its router has the protocol's singleton (Uniswap V4, Fluid
