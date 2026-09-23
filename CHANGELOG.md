@@ -1,3 +1,12 @@
+## [0.421.1](https://github.com/propeller-heads/tycho/compare/0.421.0...0.421.1) (2026-09-23)
+
+
+### Bug Fixes
+
+* **client:** close the websocket when the stream fails to start ([6f2592f](https://github.com/propeller-heads/tycho/commit/6f2592fc7f583c4d74574fc0dee7318d86053f2c))
+* **client:** close the websocket when the stream fails to start ([#1479](https://github.com/propeller-heads/tycho/issues/1479)) ([15858c2](https://github.com/propeller-heads/tycho/commit/15858c2f2f8a4bd58322cf289610d55a5f640715))
+* **client:** close the websocket when the stream's synchronizer ends ([45c8268](https://github.com/propeller-heads/tycho/commit/45c8268599543a81b86cef400053397385e7910a))
+
 ## [0.421.0](https://github.com/propeller-heads/tycho/compare/0.420.0...0.421.0) (2026-09-23)
 
 
