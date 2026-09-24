@@ -3,56 +3,22 @@ pragma solidity ^0.8.26;
 import "../TychoRouterTestSetup.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-/// @dev A block carrying a committed USDC/WETH lane, after the router upgrade at
-/// block 25744018 that turned on `openTakerAccess`. Lane payloads persist in
-/// registry storage after the commit, so the ladder is readable; only the
-/// timestamp goes stale, which `_refreshLane` restamps.
-uint256 constant TEMPEST_FORK_BLOCK = 25963848;
+/// @dev The block in which the maker committed a USDC/WETH lane, so the lane's
+/// `updateTimestamp` equals this block's timestamp and the router's freshness
+/// window passes without the test restamping anything. On chain the builder
+/// gets the same result by ordering the maker's quote tx directly ahead of the
+/// fill.
+///
+/// Picked after both of the venue's migrations: `openTakerAccess` was turned on
+/// at block 25744018, and the router switched `PrioUpdateRegistry` at 25989123.
+/// This block runs implementation 0x94c4c2a0 against registry
+/// 0xda7afeed021e...6b81, which is what is live today. No taker fixture is
+/// needed because `openTakerAccess` bypasses the `allowedTaker` check -- the
+/// gate itself is intact, so this proves the path works today, not that
+/// settlement is permanently ungated.
+uint256 constant TEMPEST_FORK_BLOCK = 26044074;
 
-/// @dev Shared fork fixtures for Tempest: a swap only settles if the lane is
-/// inside the router's freshness window. On chain the builder guarantees that by
-/// ordering the maker's quote tx directly ahead of the fill; here it is set with
-/// `vm.store`. No taker fixture is needed at this block because the venue's
-/// `openTakerAccess` flag is on, which bypasses the `allowedTaker` check. The
-/// gate itself is intact -- an OPERATOR can turn the flag off, and a blocked
-/// taker is rejected regardless -- so this test proves the path works today,
-/// not that settlement is permanently ungated.
-abstract contract TempestFixtures is Constants {
-    function _refreshLane(address tokenA, address tokenB) internal {
-        bytes32 laneSlot = keccak256(
-            abi.encode(TEMPEST_ROUTER, uint256(_lane(tokenA, tokenB)))
-        );
-        uint256 storedLane = uint256(vm.load(TEMPEST_REGISTRY, laneSlot));
-
-        // Guards against the fork block having no committed ladder, which would
-        // make every swap assertion below vacuous.
-        require(
-            (storedLane >> 216) & 0xff > 0, "no committed lane at fork block"
-        );
-
-        vm.store(
-            TEMPEST_REGISTRY,
-            laneSlot,
-            bytes32(
-                (uint256(uint32(block.timestamp)) << 224)
-                    | (storedLane & ((uint256(1) << 224) - 1))
-            )
-        );
-    }
-
-    /// Mirrors `Tempest.laneFor`: keccak of the ascending-sorted packed pair.
-    function _lane(address tokenA, address tokenB)
-        internal
-        pure
-        returns (bytes32)
-    {
-        (address token0, address token1) =
-            tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);
-        return keccak256(abi.encodePacked(token0, token1));
-    }
-}
-
-contract TempestRouterTest is TychoRouterTestSetup, TempestFixtures {
+contract TempestRouterTest is TychoRouterTestSetup {
     function getForkBlock() public pure override returns (uint256) {
         return TEMPEST_FORK_BLOCK;
     }
@@ -62,8 +28,6 @@ contract TempestRouterTest is TychoRouterTestSetup, TempestFixtures {
         bytes memory callData = loadCallDataFromFile(
             "test_single_encoding_strategy_tempest_weth_usdc"
         );
-
-        _refreshLane(WETH_ADDR, USDC_ADDR);
 
         deal(WETH_ADDR, ALICE, amountIn);
         vm.startPrank(ALICE);
