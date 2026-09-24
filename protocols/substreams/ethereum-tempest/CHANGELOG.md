@@ -21,3 +21,8 @@ Flashbots `PrioUpdateRegistry`.
   reported paused, since every quote entrypoint is `whenNotPaused`.
 - Registers the router implementation through DCI rather than the component contract set,
   which is frozen at creation and would go stale on the next `upgradeToAndCall`.
+- Reads lanes from `0xda7afeed021eafc1c1af9c362de477dad0396b81`, the `PrioUpdateRegistry`
+  the router switched to at block 25989123. The switch is a plain storage write and the
+  router emits no events, so it cannot be followed the way `VaultUpdated` is followed for
+  the vault: a further migration needs the `registry_address` parameter changed. Lanes
+  committed to the previous instance before that block are not indexed.

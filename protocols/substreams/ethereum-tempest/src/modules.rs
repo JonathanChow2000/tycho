@@ -132,13 +132,7 @@ fn get_new_pairs(
     // of the *token* contracts, and simulation reaches its inventory through the mutable
     // `balance_owner` attribute rather than through this set. `map_protocol_changes` repoints that
     // attribute on `VaultUpdated`, so a rotation is followed without anything being frozen here.
-    let mut contracts = vec![config.router_address.as_slice()];
-    contracts.extend(
-        config
-            .registry_addresses
-            .iter()
-            .map(|registry| registry.as_slice()),
-    );
+    let contracts = [config.router_address.as_slice(), config.registry_address.as_slice()];
 
     let mut on_pair_registered = |event: PairRegistered, tx: &TransactionTrace, _log: &Log| {
         if !event.registered {
@@ -490,7 +484,8 @@ fn map_protocol_changes(
         // still carries `address == router`, and this is an `any` over every frame.
         let touches_tempest = trx.calls.iter().any(|call| {
             !call.state_reverted &&
-                (call.address == config.router_address || config.is_registry(&call.address))
+                (call.address == config.router_address ||
+                    call.address == config.registry_address)
         });
         if !touches_tempest {
             continue;
@@ -573,7 +568,7 @@ fn map_protocol_changes(
         for call in trx
             .calls
             .iter()
-            .filter(|call| !call.state_reverted && config.is_registry(&call.address))
+            .filter(|call| !call.state_reverted && call.address == config.registry_address)
         {
             // The router reads its lane with the settling block's timestamp and reverts
             // `StaleUpdate` outside a 12s window. Pin simulation to the committed quote timestamp
@@ -679,7 +674,7 @@ fn map_protocol_changes(
         &block,
         // The vault is deliberately absent: nothing calls it, so its storage is never read
         // during simulation, and it belongs to no component's contract set.
-        |addr| addr == config.router_address || config.is_registry(addr),
+        |addr| addr == config.router_address || addr == config.registry_address,
         &mut transaction_changes,
     );
 

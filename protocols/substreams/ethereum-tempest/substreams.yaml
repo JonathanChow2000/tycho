@@ -23,12 +23,11 @@ binaries:
 
 network: mainnet
 
-# `registry_addresses` lists every `PrioUpdateRegistry` the router has read lanes from,
-# oldest first. The router switched from the first to the second at block 25989123 with a
-# plain storage write and no event, so both have to be watched for a run to decode
-# `updateState` on either side of that block.
+# `registry_address` is the `PrioUpdateRegistry` the router reads lanes from now. It switched
+# from 0xda7afeed01fe…8c5f at block 25989123 with a plain storage write and no event, so a
+# further migration needs this value changed -- it cannot be event-sourced.
 params:
-  map_protocol_components: &tempest_params "router_address=00000003f1ec2379e79f58e12ec6c4f51ee92149&vault_address=c9d748e601d9984a43da0b80e5b91dc28d31d9fb&registry_addresses=DA7AFeEd01fe625cF15D187A19F94B45F00b8C5f,da7afeed021eafc1c1af9c362de477dad0396b81"
+  map_protocol_components: &tempest_params "router_address=00000003f1ec2379e79f58e12ec6c4f51ee92149&vault_address=c9d748e601d9984a43da0b80e5b91dc28d31d9fb&registry_address=da7afeed021eafc1c1af9c362de477dad0396b81"
   store_pair_registered: *tempest_params
   store_router_state: *tempest_params
   map_vault_balance_snapshots: *tempest_params

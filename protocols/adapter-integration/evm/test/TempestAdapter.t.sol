@@ -13,7 +13,7 @@ contract TempestAdapterTest is AdapterTest {
         0x00000003f1ec2379e79F58E12EC6C4F51Ee92149;
     address constant TEMPEST_VAULT = 0xC9d748e601d9984A43Da0b80E5b91dc28d31d9fB;
     address constant PRIO_UPDATE_REGISTRY =
-        0xDa7AfeeD01fe625CF15d187a19f94B45f00b8C5F;
+        0xDa7AfEeD021EAFC1c1Af9C362dE477DaD0396B81;
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
     address constant USDT = 0xdAC17F958D2ee523a2206206994597C13D831ec7;
@@ -22,14 +22,14 @@ contract TempestAdapterTest is AdapterTest {
     uint256 constant BUY_USDC_AMOUNT = 100e6;
 
     function setUp() public {
-        // The maker's last committed lane for USDC/WETH. Lane payloads persist
-        // in registry storage after the commit, so the ladder is readable here;
-        // only the timestamp goes stale, which _refreshLane restamps.
-        // After the router upgrade at block 25744018 that turned on
-        // `openTakerAccess`, so `swap` settles from the adapter's own address
-        // without an `allowedTaker` entry. The gate is intact, just bypassed.
-        vm.createSelectFork(vm.rpcUrl("mainnet"), 25963848);
-        _refreshLane(USDC, WETH);
+        // A block in which the maker committed lanes, so they are inside the
+        // router's freshness window without the test restamping anything.
+        // Past the upgrade at 25744018 that turned on `openTakerAccess`, so
+        // `swap` settles from the adapter's own address without an
+        // `allowedTaker` entry -- the gate is intact, just bypassed -- and past
+        // the registry switch at 25989123, so this runs against the registry
+        // the router reads now.
+        vm.createSelectFork(vm.rpcUrl("mainnet"), 26044074);
 
         adapter = new TempestAdapter(TEMPEST_ROUTER);
 
@@ -183,11 +183,9 @@ contract TempestAdapterTest is AdapterTest {
         assertLe(limits[1], IERC20(USDC).balanceOf(TEMPEST_VAULT));
     }
 
-    /// Every registered pair carries a committed ladder at this block, so a
-    /// second pair must quote as well as the one refreshed in `setUp`.
-    function testGetLimitsSecondPair() public {
-        _refreshLane(USDC, USDT);
-
+    /// A second pair carries a fresh lane at this block too, so it must quote
+    /// as well as USDC/WETH.
+    function testGetLimitsSecondPair() public view {
         uint256[] memory limits =
             adapter.getLimits(_poolId(USDC, USDT), USDC, USDT);
 
@@ -217,32 +215,6 @@ contract TempestAdapterTest is AdapterTest {
         adapter.getLimits(_poolId(USDC, WETH), WETH, USDT);
     }
 
-    /// Restamps a committed lane to the current block so `getState` passes the
-    /// router's freshness window. Mirrors what the builder does by ordering the
-    /// maker's quote tx immediately ahead of the fill in the same block.
-    function _refreshLane(address tokenA, address tokenB) internal {
-        // The registry keys lanes by the router's own `laneFor`, which is not
-        // the (router-scoped) pool id.
-        bytes32 laneSlot = keccak256(
-            abi.encode(TEMPEST_ROUTER, uint256(_laneFor(tokenA, tokenB)))
-        );
-        uint256 storedLane = uint256(vm.load(PRIO_UPDATE_REGISTRY, laneSlot));
-        uint256 storedSlotCount = (storedLane >> 216) & 0xff;
-
-        // Guards against the fork block silently having no committed ladder,
-        // which would make every assertion below vacuous.
-        assertGt(storedSlotCount, 0);
-
-        vm.store(
-            PRIO_UPDATE_REGISTRY,
-            laneSlot,
-            bytes32(
-                (uint256(uint32(block.timestamp)) << 224)
-                    | (storedLane & ((uint256(1) << 224) - 1))
-            )
-        );
-    }
-
     /// Gives this contract `amount` of `token` and lets the adapter pull it.
     function _fund(address token, uint256 amount) internal {
         deal(token, address(this), amount);
@@ -259,17 +231,5 @@ contract TempestAdapterTest is AdapterTest {
         (address token0, address token1) =
             tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);
         return keccak256(abi.encodePacked(TEMPEST_ROUTER, token0, token1));
-    }
-
-    /// Mirrors `Tempest.laneFor`: keccak of the ascending-sorted packed pair.
-    /// This is the registry's lane key, distinct from the pool id above.
-    function _laneFor(address tokenA, address tokenB)
-        internal
-        pure
-        returns (bytes32)
-    {
-        (address token0, address token1) =
-            tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);
-        return keccak256(abi.encodePacked(token0, token1));
     }
 }
