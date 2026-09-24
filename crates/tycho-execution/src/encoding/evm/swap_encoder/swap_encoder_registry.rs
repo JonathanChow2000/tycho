@@ -391,6 +391,21 @@ mod tests {
         }
     }
 
+    /// `test_executor_addresses_match_registered_encoders` iterates what is registered, so it
+    /// cannot see a protocol missing from the config. Assert the Tempest key resolves against the
+    /// production address file, not the test one.
+    #[test]
+    fn test_tempest_resolves_against_default_config() {
+        let registry = SwapEncoderRegistry::new_with_defaults(Chain::Ethereum).unwrap();
+
+        assert!(
+            registry
+                .get_encoder(TEMPEST_KEY)
+                .is_some(),
+            "{TEMPEST_KEY} has no encoder in the default config; a swap through it cannot encode"
+        );
+    }
+
     #[test]
     fn test_executor_addresses_match_registered_encoders() {
         let registry = SwapEncoderRegistry::new_with_defaults(Chain::Ethereum).unwrap();
