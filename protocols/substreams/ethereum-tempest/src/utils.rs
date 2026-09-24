@@ -30,9 +30,46 @@ pub struct Config {
     /// the fallback for runs that start after that event. See `modules::vault_address`.
     #[serde(with = "hex::serde")]
     pub vault_address: Vec<u8>,
-    /// The shared `PrioUpdateRegistry` the router reads quote lanes from.
-    #[serde(with = "hex::serde")]
-    pub registry_address: Vec<u8>,
+    /// The `PrioUpdateRegistry` contracts the router reads quote lanes from, oldest first.
+    ///
+    /// A comma-separated list rather than a single address. The router's registry pointer is a
+    /// plain storage write and the router emits no event for it, so a migration cannot be
+    /// followed the way `VaultUpdated` is followed for the vault. Every registry the router has
+    /// pointed at therefore has to be watched, so a run spanning a migration keeps decoding
+    /// `updateState` on both sides of it.
+    #[serde(deserialize_with = "deserialize_address_list")]
+    pub registry_addresses: Vec<Vec<u8>>,
+}
+
+impl Config {
+    /// Whether `address` is one of the registries the router reads quote lanes from.
+    pub fn is_registry(&self, address: &[u8]) -> bool {
+        self.registry_addresses
+            .iter()
+            .any(|registry| registry == address)
+    }
+}
+
+/// Deserializes a comma-separated list of hex addresses, with or without `0x` prefixes.
+///
+/// Returns an error naming the offending entry if any element is not valid hex, so a malformed
+/// package parameter fails at startup rather than silently watching no registry.
+fn deserialize_address_list<'de, D>(deserializer: D) -> Result<Vec<Vec<u8>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer)?;
+    raw.split(',')
+        .map(|entry| {
+            let entry = entry.trim();
+            let entry = entry
+                .strip_prefix("0x")
+                .unwrap_or(entry);
+            hex::decode(entry).map_err(|e| {
+                serde::de::Error::custom(format!("invalid address {entry:?} in list: {e}"))
+            })
+        })
+        .collect()
 }
 
 /// Computes the Tycho component id for a token pair on a given Tempest router.
@@ -217,12 +254,32 @@ mod tests {
         let config: Config = serde_qs::from_str(
             "router_address=00000003f1ec2379e79f58e12ec6c4f51ee92149\
              &vault_address=c9d748e601d9984a43da0b80e5b91dc28d31d9fb\
-             &registry_address=DA7AFeEd01fe625cF15D187A19F94B45F00b8C5f",
+             &registry_addresses=DA7AFeEd01fe625cF15D187A19F94B45F00b8C5f,\
+             da7afeed021eafc1c1af9c362de477dad0396b81",
         )
         .unwrap();
 
         assert_eq!(config.router_address, addr("00000003f1ec2379e79f58e12ec6c4f51ee92149"));
         assert_eq!(config.vault_address, addr("c9d748e601d9984a43da0b80e5b91dc28d31d9fb"));
-        assert_eq!(config.registry_address, addr("da7afeed01fe625cf15d187a19f94b45f00b8c5f"));
+        assert_eq!(
+            config.registry_addresses,
+            vec![
+                addr("da7afeed01fe625cf15d187a19f94b45f00b8c5f"),
+                addr("da7afeed021eafc1c1af9c362de477dad0396b81"),
+            ]
+        );
+        assert!(config.is_registry(&addr("da7afeed021eafc1c1af9c362de477dad0396b81")));
+        assert!(!config.is_registry(&addr("00000003f1ec2379e79f58e12ec6c4f51ee92149")));
+    }
+
+    #[test]
+    fn test_config_rejects_malformed_registry_address() {
+        let result: Result<Config, _> = serde_qs::from_str(
+            "router_address=00000003f1ec2379e79f58e12ec6c4f51ee92149\
+             &vault_address=c9d748e601d9984a43da0b80e5b91dc28d31d9fb\
+             &registry_addresses=DA7AFeEd01fe625cF15D187A19F94B45F00b8C5f,zzzz",
+        );
+
+        assert!(result.is_err(), "a malformed registry address must fail the run, not be skipped");
     }
 }
