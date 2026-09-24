@@ -1,3 +1,262 @@
+## [0.423.0](https://github.com/propeller-heads/tycho/compare/0.422.1...0.423.0) (2026-09-23)
+
+
+### Features
+
+* **execution:** add the deployed Robinhood EkuboV3 executor address ([c916dc6](https://github.com/propeller-heads/tycho/commit/c916dc674a0869eed33a5fa3b90ff8d28b9b64ea))
+* **execution:** set Robinhood SignedExclusiveSwap address ([e89041d](https://github.com/propeller-heads/tycho/commit/e89041dec819e6a71ff1058963efa74044221c27))
+* recognise the Robinhood SignedExclusiveSwap deployment ([f76adcb](https://github.com/propeller-heads/tycho/commit/f76adcb1f831d102ff8f8a3d0e2e59234ccacc14))
+* take the SignedExclusiveSwap address as a constructor arg ([cf56d04](https://github.com/propeller-heads/tycho/commit/cf56d04cc7acd998904b16d93ec2198cd8e14e46))
+* take the SignedExclusiveSwap address as a constructor arg ([#1463](https://github.com/propeller-heads/tycho/issues/1463)) ([273c102](https://github.com/propeller-heads/tycho/commit/273c10228ae933032f68908dd668b10991006169))
+
+## [0.422.1](https://github.com/propeller-heads/tycho/compare/0.422.0...0.422.1) (2026-09-23)
+
+
+### Bug Fixes
+
+* **simulation:** forward snapshot entrypoints to pending indexers ([8b490ca](https://github.com/propeller-heads/tycho/commit/8b490ca9edaefa1745a7353bf65ab88a4f42ee5e))
+* **simulation:** forward snapshot entrypoints to pending indexers ([#1482](https://github.com/propeller-heads/tycho/issues/1482)) ([204a026](https://github.com/propeller-heads/tycho/commit/204a026d3e002061213a76f14b1aec63252d1e8b))
+
+## [0.422.0](https://github.com/propeller-heads/tycho/compare/0.421.1...0.422.0) (2026-09-23)
+
+
+### Features
+
+* **execution:** update Hashflow executor address ([#1478](https://github.com/propeller-heads/tycho/issues/1478)) ([43e3103](https://github.com/propeller-heads/tycho/commit/43e31033ed438b6c17bd53f916d2a8e6b5af068d))
+
+## [0.421.1](https://github.com/propeller-heads/tycho/compare/0.421.0...0.421.1) (2026-09-23)
+
+
+### Bug Fixes
+
+* **client:** close the websocket when the stream fails to start ([6f2592f](https://github.com/propeller-heads/tycho/commit/6f2592fc7f583c4d74574fc0dee7318d86053f2c))
+* **client:** close the websocket when the stream fails to start ([#1479](https://github.com/propeller-heads/tycho/issues/1479)) ([15858c2](https://github.com/propeller-heads/tycho/commit/15858c2f2f8a4bd58322cf289610d55a5f640715))
+* **client:** close the websocket when the stream's synchronizer ends ([45c8268](https://github.com/propeller-heads/tycho/commit/45c8268599543a81b86cef400053397385e7910a))
+
+## [0.421.0](https://github.com/propeller-heads/tycho/compare/0.420.0...0.421.0) (2026-09-23)
+
+
+### Features
+
+* **execution:** expose FallbackSwapData for building fallback user_data ([ddaa045](https://github.com/propeller-heads/tycho/commit/ddaa0454ed8cfb7a4546f04d6b1a04f6e3d710c4))
+* **execution:** expose FallbackSwapData for building fallback user_data ([#1483](https://github.com/propeller-heads/tycho/issues/1483)) ([35a1f18](https://github.com/propeller-heads/tycho/commit/35a1f1878e76b01a7cb4ea59bf6c28bd14649736))
+
+## [0.420.0](https://github.com/propeller-heads/tycho/compare/0.419.0...0.420.0) (2026-09-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* activate the TychoFallbackRouter (#1473)
+* **execution:** remove the PropAMMRouter fallback path
+* **simulation:** emit pAMM components under the fallback family
+
+### Features
+
+* activate the TychoFallbackRouter ([#1473](https://github.com/propeller-heads/tycho/issues/1473)) ([6dcc1bd](https://github.com/propeller-heads/tycho/commit/6dcc1bd2d3530611eefaa143b172aa692a443c7d))
+* **execution:** configure the FallbackExecutor deployment ([180149c](https://github.com/propeller-heads/tycho/commit/180149cfa4578c69046b057bf1593bce5eaecf91))
+* **execution:** register the FallbackExecutor on Ethereum and Base ([68c1d91](https://github.com/propeller-heads/tycho/commit/68c1d91d6fffaca29cfd7038f49d243b9ebf5a8e))
+* **simulation:** emit pAMM components under the fallback family ([7738c60](https://github.com/propeller-heads/tycho/commit/7738c60d4ff2be28e9d2a2242e0ab9f1506bb563))
+
+
+### Code Refactoring
+
+* **execution:** remove the PropAMMRouter fallback path ([8e93337](https://github.com/propeller-heads/tycho/commit/8e933373a4a8acbec97d98d77a5406a4627c149a))
+
+## [0.419.0](https://github.com/propeller-heads/tycho/compare/0.418.0...0.419.0) (2026-09-23)
+
+
+### Features
+
+* **execution:** record the deployed lido_v4 and etherfi executors ([4b9c5d2](https://github.com/propeller-heads/tycho/commit/4b9c5d2140d498b7529484f6a9351f651bb01ee4))
+* **integration-test:** quote lido_v4 and etherfi in the cluster test ([a4267ca](https://github.com/propeller-heads/tycho/commit/a4267ca1e58e6da78204247321566d510272d45a)), closes [#929](https://github.com/propeller-heads/tycho/issues/929) [#1427](https://github.com/propeller-heads/tycho/issues/1427)
+* wire lido_v4 and etherfi into the cluster test and the executor registry ([#1475](https://github.com/propeller-heads/tycho/issues/1475)) ([9be2563](https://github.com/propeller-heads/tycho/commit/9be2563af8b27d5fdbb3791d965f416470e4539d))
+
+## [0.418.0](https://github.com/propeller-heads/tycho/compare/0.417.0...0.418.0) (2026-09-22)
+
+
+### Features
+
+* **substreams:** add Arc Uniswap V2 package ([842284b](https://github.com/propeller-heads/tycho/commit/842284b042d01ed7087463a02dd1d2938b3d9a83))
+* **substreams:** add Arc Uniswap V2 package ([#1481](https://github.com/propeller-heads/tycho/issues/1481)) ([bbe6297](https://github.com/propeller-heads/tycho/commit/bbe6297fd5c0cce00d2171d2dffbbf85ad34b05f))
+
+
+### Bug Fixes
+
+* **substreams:** keep manifest-only package version ([bff903b](https://github.com/propeller-heads/tycho/commit/bff903b15811cd20c4e55c036d643f390f5bef28))
+
+## [0.417.0](https://github.com/propeller-heads/tycho/compare/0.416.0...0.417.0) (2026-09-22)
+
+
+### Features
+
+* **testing:** support Arc Substreams integration ([7474bdb](https://github.com/propeller-heads/tycho/commit/7474bdbb01b12165b40bf71b1f295b4fe312fe0b))
+* **testing:** support Arc Substreams integration ([#1480](https://github.com/propeller-heads/tycho/issues/1480)) ([6a77465](https://github.com/propeller-heads/tycho/commit/6a7746515fbb8f5245299ad11dca64a64bec8ec3))
+
+## [0.416.0](https://github.com/propeller-heads/tycho/compare/0.415.1...0.416.0) (2026-09-22)
+
+
+### Features
+
+* tune Arc client timing ([88d0051](https://github.com/propeller-heads/tycho/commit/88d00513eea3a50d4a7e54b7b37178c953b7aa0b))
+* tune Arc client timing ([#1468](https://github.com/propeller-heads/tycho/issues/1468)) ([3180320](https://github.com/propeller-heads/tycho/commit/31803204391c235c3d636da9b1393b4417449726))
+
+## [0.415.1](https://github.com/propeller-heads/tycho/compare/0.415.0...0.415.1) (2026-09-22)
+
+
+### Bug Fixes
+
+* **indexer:** shorten substreams reconnect delays ([014bf28](https://github.com/propeller-heads/tycho/commit/014bf288b00c02c9d08378421251ffc25f718568))
+* **indexer:** shorten substreams reconnect delays ([#1471](https://github.com/propeller-heads/tycho/issues/1471)) ([8f9d54f](https://github.com/propeller-heads/tycho/commit/8f9d54f1bc28b44638338f55efea88b426df840b))
+
+## [0.415.0](https://github.com/propeller-heads/tycho/compare/0.414.0...0.415.0) (2026-09-21)
+
+
+### Features
+
+* add Arc chain and native USDC model ([#1467](https://github.com/propeller-heads/tycho/issues/1467)) ([3d2a388](https://github.com/propeller-heads/tycho/commit/3d2a38877e9cfe2a4557f90ff777ff8372587a52))
+* add Arc chain model and DTOs ([4ab1af5](https://github.com/propeller-heads/tycho/commit/4ab1af5b8e177db7c9a04c876e7ece0c191c10e7))
+* model Arc native USDC ([0e23bc2](https://github.com/propeller-heads/tycho/commit/0e23bc291b4514cebf4631f6dbac3332a2810086))
+
+## [0.414.0](https://github.com/propeller-heads/tycho/compare/0.413.0...0.414.0) (2026-09-21)
+
+
+### ⚠ BREAKING CHANGES
+
+* **execution:** keep the per-chain fallback protocols in Rust
+* **execution:** reject hooked Uniswap V4 pools as a fallback
+
+### Features
+
+* **execution:** configure Eden's Uniswap V3 static quoter on Base ([5a7470c](https://github.com/propeller-heads/tycho/commit/5a7470c3cab2faf9522d691266ecdb142fdb306b))
+* **execution:** deploy TychoFallbackRouter per chain, add Aerodrome V1 ([5cd62b9](https://github.com/propeller-heads/tycho/commit/5cd62b901d7c381e80d5e8e6178c7ea565c70ef7))
+* **execution:** expose FallbackProtocol and check chain support when encoding ([7ca24e2](https://github.com/propeller-heads/tycho/commit/7ca24e2d59f8d2dcf7cd876cab1cacbd5cd97f59))
+* **execution:** Fallback router multichain support ([#1462](https://github.com/propeller-heads/tycho/issues/1462)) ([1c9ae03](https://github.com/propeller-heads/tycho/commit/1c9ae033f600688d3b095f24b47de8f97b2d0a0f))
+* **execution:** list each chain's fallback protocols in a config file ([c67e6ce](https://github.com/propeller-heads/tycho/commit/c67e6ce599581fa56ba0ca798557adf3676ffa72))
+* **execution:** reject hooked Uniswap V4 pools as a fallback ([ec011f3](https://github.com/propeller-heads/tycho/commit/ec011f3bf5290bdb418cfbad9bdf3a204ba5bf71))
+
+
+### Bug Fixes
+
+* **execution:** list fallback protocols for Ethereum and Base only ([79769ae](https://github.com/propeller-heads/tycho/commit/79769aeb2db4f73206d24f844a688111c7649eb7))
+* **execution:** stop mapping uniswap_v4_hooks to the Uniswap V4 fallback ([01c35a4](https://github.com/propeller-heads/tycho/commit/01c35a49ab2cea0306b2212bc3e28489e7374623))
+* **execution:** suppress Slither zero-check on the optional Fluid address ([0f78bec](https://github.com/propeller-heads/tycho/commit/0f78bec56ad4f14f0f912d2b7126a7dfc65bf798))
+
+
+### Code Refactoring
+
+* **execution:** keep the per-chain fallback protocols in Rust ([6612c37](https://github.com/propeller-heads/tycho/commit/6612c37b8bacebfa8bab9b13dff36de9f53f0170))
+
+## [0.413.0](https://github.com/propeller-heads/tycho/compare/0.412.0...0.413.0) (2026-09-21)
+
+
+### Features
+
+* **tycho-client:** configure subscription buffer size ([e6063e2](https://github.com/propeller-heads/tycho/commit/e6063e2379baa1562d48d94343b78c65eb502a47))
+* **tycho-client:** configure subscription buffer size ([#1472](https://github.com/propeller-heads/tycho/issues/1472)) ([17ada9e](https://github.com/propeller-heads/tycho/commit/17ada9e351d6bbc5ce400299b73b0a5d78eec041))
+
+## [0.412.0](https://github.com/propeller-heads/tycho/compare/0.411.0...0.412.0) (2026-09-21)
+
+
+### Features
+
+* add ethereum-lido-v3 substreams package ([63c7792](https://github.com/propeller-heads/tycho/commit/63c7792d7b4939b0509f56ee09bc8b1b7ce20f5f))
+* lido v4 integration ([#929](https://github.com/propeller-heads/tycho/issues/929)) ([691ca4e](https://github.com/propeller-heads/tycho/commit/691ca4eaed4c9c5cc27ef6de527118faf77efb50))
+* **lido:** anchor the component to the upgrade transaction ([b289f41](https://github.com/propeller-heads/tycho/commit/b289f412667dcf9427d55e52840c37256c691171))
+* **lido:** move pooled-ether accounting to the Lido v4 storage layout ([262e198](https://github.com/propeller-heads/tycho/commit/262e198e0a622a1f4a3e42c3a8472dcb43da601a))
+* **lido:** pause the component when stETH changes implementation ([e64fb38](https://github.com/propeller-heads/tycho/commit/e64fb381c90220555c708639209b474bdf2896a9))
+* **lido:** quote ETH -> wstETH through the wrapper's receive() ([1a46bfe](https://github.com/propeller-heads/tycho/commit/1a46bfe17edf107636f919c003a679d9c0f4e61f))
+* **lido:** rename the integration to lido_v4 ([85188e3](https://github.com/propeller-heads/tycho/commit/85188e3d63db6652639d037ee6ba5b6d3b5eca7f))
+* register lido_v3 in protocol testing ([63d8989](https://github.com/propeller-heads/tycho/commit/63d89896ae0a4a926e90f6cde17be9d9a45d2993))
+* **tycho-execution:** add lido v3 execution support ([ef5a4e4](https://github.com/propeller-heads/tycho/commit/ef5a4e46356f6a61b1845df7f1d6b7ae7d2e38df))
+* **tycho-simulation:** add lido v3 simulation ([17551f9](https://github.com/propeller-heads/tycho/commit/17551f931b85dba20d33a1186caf9b4a368f5a1e))
+
+
+### Bug Fixes
+
+* **lido:** align storage updates, trade limits and unwrap receipts ([51d1a18](https://github.com/propeller-heads/tycho/commit/51d1a1855f8df621489cdbb356ad6b983d1a90ed))
+* **lido:** check the staking word against the fields it packs ([bba75ad](https://github.com/propeller-heads/tycho/commit/bba75ad60b6bd0d6dc99b3ca8fc2d894cf55d696))
+* **lido:** fail loudly when a store value does not decode ([c61cc7a](https://github.com/propeller-heads/tycho/commit/c61cc7aabed912132ca8f348cb0fca40f4332487))
+* **lido:** match the chain on unwrap dust, the wrap bound and gas ([9dacbb1](https://github.com/propeller-heads/tycho/commit/9dacbb121c00ad263571aa2e3d815ec9b4f44908))
+* **lido:** pause on the implementation a transaction ends on, and cover the filters ([142677a](https://github.com/propeller-heads/tycho/commit/142677a3d14e614338488c3aea5588b6ac20e7c6))
+* **lido:** pick the anchor transaction deterministically ([36ed25a](https://github.com/propeller-heads/tycho/commit/36ed25a068a985a2b3d9f3eb0090079b1feb4803))
+* **lido:** reject attributes wider than their storage field ([39c9d50](https://github.com/propeller-heads/tycho/commit/39c9d5080b908ac2a00a1c14791e781bf0d52914))
+* **tycho-execution:** charge lido's output transfer and wrap approval ([27ffc86](https://github.com/propeller-heads/tycho/commit/27ffc8624e74c03c6d93089130ce959851d4c517))
+* **tycho-simulation:** bound lido v3 wrap and unwrap limits ([a6cd9df](https://github.com/propeller-heads/tycho/commit/a6cd9df090aebc353230f063b20dfcba67262768))
+* **tycho-simulation:** bound the lido unwrap quote by the wrapper's shares ([3ce791e](https://github.com/propeller-heads/tycho/commit/3ce791e7f94cb07c627809a66a870bf1d4654a3f))
+* **tycho-simulation:** let an unknown lido token error instead of reading as zero ([cde47bf](https://github.com/propeller-heads/tycho/commit/cde47bfec89a1c2c329b472590d17256ef0106ae))
+* **tycho-simulation:** quote lido stETH/ETH in both orderings ([d6aa72e](https://github.com/propeller-heads/tycho/commit/d6aa72e811f9c4e3e4630c98298ee84095f66288))
+* **tycho-simulation:** use checked arithmetic in the lido share math ([cc9d1d0](https://github.com/propeller-heads/tycho/commit/cc9d1d09a83a88a8f881e381db93446b3754205f))
+
+
+### Performance Improvements
+
+* **lido:** defer the per-block balance state read ([1df4417](https://github.com/propeller-heads/tycho/commit/1df44170af0a61847e008ffd294d39c20812a726))
+
+## [0.411.0](https://github.com/propeller-heads/tycho/compare/0.410.0...0.411.0) (2026-09-21)
+
+
+### Features
+
+* add ethereum-etherfi substreams package ([e839374](https://github.com/propeller-heads/tycho/commit/e8393749c4a3650395bbf08be7054a1401cd9bf0))
+* add etherfi substreams and fix its simulation ([#1427](https://github.com/propeller-heads/tycho/issues/1427)) ([a836a00](https://github.com/propeller-heads/tycho/commit/a836a00756e5ea5b61b89bff516a49a93949c5f0))
+* **etherfi:** model the contracts live since the escrow migration ([2da5d84](https://github.com/propeller-heads/tycho/commit/2da5d84c3db5ef1aab15d7573a1fc801eff2fe2f))
+* **etherfi:** pause both components when a tracked proxy is upgraded ([6dab164](https://github.com/propeller-heads/tycho/commit/6dab1642fbdad17279bd19606198b7a6bf0b4e53))
+* **etherfi:** seed components from a params snapshot at the start block ([fb8c84d](https://github.com/propeller-heads/tycho/commit/fb8c84de63b27c150535cab44cfc09a107208e80))
+
+
+### Bug Fixes
+
+* **etherfi:** correct burn accounting and storage write ordering ([8167ed0](https://github.com/propeller-heads/tycho/commit/8167ed0ae1263c598c2264e213d0d5e72e92c3d8))
+* **etherfi:** make the redemption limit quotable and guard its inputs ([92b9c1a](https://github.com/propeller-heads/tycho/commit/92b9c1a777c5600451de04cc0cdf743366a8ac33))
+* **etherfi:** pause on the implementation a transaction ends on, and cover the filters ([c1af497](https://github.com/propeller-heads/tycho/commit/c1af497d9ddac677e115ccf37b8d002cc034a73f))
+* **etherfi:** report native ETH as 0x00..00, not the router sentinel ([4097aa1](https://github.com/propeller-heads/tycho/commit/4097aa132f10f0502a7c3e7b0e3fb85a8c7031a2))
+* **testing:** plant fixture stubs only at listed addresses ([dac9569](https://github.com/propeller-heads/tycho/commit/dac956970bc9232ebae049b529cd0ef8a7bae2ea))
+* **tycho-simulation:** bound etherfi redemption limit by redeemable liquidity ([e7c1236](https://github.com/propeller-heads/tycho/commit/e7c123616d334659d46110d8c1929f73cc568a45))
+* **tycho-simulation:** correct etherfi share math and limits ([be93d55](https://github.com/propeller-heads/tycho/commit/be93d55ffd8111513fca76e19cb09a7b3f17ccf8))
+
+## [0.410.0](https://github.com/propeller-heads/tycho/compare/0.409.0...0.410.0) (2026-09-18)
+
+
+### Features
+
+* **execution:** quote the pAMM against its fallback before swapping ([cfc3cb3](https://github.com/propeller-heads/tycho/commit/cfc3cb38fcc7360dccd67a65fd06710ba30f3c8e))
+* **execution:** quote the pAMM against its fallback before swapping ([#1446](https://github.com/propeller-heads/tycho/issues/1446)) ([23dae48](https://github.com/propeller-heads/tycho/commit/23dae48ef4a4e04a9d61c6a0d32cfd4683c17413))
+
+## [0.409.0](https://github.com/propeller-heads/tycho/compare/0.408.0...0.409.0) (2026-09-18)
+
+
+### Features
+
+* **indexer:** add delta window depth and fold batch flags ([a8e8a89](https://github.com/propeller-heads/tycho/commit/a8e8a89edd538f0fbdae5923ded23fc13926e64a))
+* **indexer:** add DeltaWindow patch capture ([d0c28b0](https://github.com/propeller-heads/tycho/commit/d0c28b026501c0fbc6f50c30be2d7f3466d59404))
+* **indexer:** add DeltaWindow skeleton for entity cache ([5a76f93](https://github.com/propeller-heads/tycho/commit/5a76f93dbb7600552ce88b9557cad5afcac9cdd9))
+* **indexer:** add ReorgBuffer::oldest_block and expose version comparison ([49713c3](https://github.com/propeller-heads/tycho/commit/49713c33a9e579263e3c5d6edf3a1e2a48a554d1))
+* **indexer:** back PendingDeltas with DeltaWindow ([c497d14](https://github.com/propeller-heads/tycho/commit/c497d14be5350f22dd9fa760756b0604c462f2c9))
+* **indexer:** batch DeltaWindow folding behind a minimum fold size ([1cac111](https://github.com/propeller-heads/tycho/commit/1cac111ad7c58feb9f40b40956fc26255bb57252))
+* **indexer:** expose DeltaWindow block ranges and WindowConfig ([58e89cb](https://github.com/propeller-heads/tycho/commit/58e89cb3822aa664ce634eb23e262365eb17a373))
+* **indexer:** implement DeltaWindow eviction bound ([f0bba7d](https://github.com/propeller-heads/tycho/commit/f0bba7d4604ea6a69d97527cdbd6e73852962b44))
+* **indexer:** implement DeltaWindow floor and version resolution ([554fa37](https://github.com/propeller-heads/tycho/commit/554fa37ac06c09dd1ad8d8f1cfb5f9f9093d31cd))
+* **indexer:** implement DeltaWindow fold_and_evict with a discard sink ([190bd41](https://github.com/propeller-heads/tycho/commit/190bd41b30ade62937b380a895abb5ab6df8487b))
+* **indexer:** implement DeltaWindow insert and watermarks ([a1a8eb3](https://github.com/propeller-heads/tycho/commit/a1a8eb3499a4bc28d4d72632497e1987db7252ab))
+* **indexer:** implement DeltaWindow revert guard ([8188fc3](https://github.com/propeller-heads/tycho/commit/8188fc32b9f78dd28c8a5017588b5215bb45dc8f))
+* **indexer:** implement DeltaWindow watermark commit status ([d3cdd10](https://github.com/propeller-heads/tycho/commit/d3cdd10cfe027106c9694bcf966f2448216c155d))
+* **indexer:** meter DeltaWindow fold duration ([30380ce](https://github.com/propeller-heads/tycho/commit/30380ced7728406288f844782b96a7788d21c1ef))
+
+
+### Bug Fixes
+
+* **indexer:** end the pump on a DeltaWindow insert error ([7dd93f2](https://github.com/propeller-heads/tycho/commit/7dd93f257f00af1b8fbaa4a64b51c5a2965aaa79))
+* **indexer:** fold committed blocks before a window reset ([b1879ec](https://github.com/propeller-heads/tycho/commit/b1879ec3adf264775e7fc6875fe5a12c00b24778))
+* **indexer:** log an error when a ReorgBuffer index lookup finds the wrong block ([bf606f6](https://github.com/propeller-heads/tycho/commit/bf606f68715c0a99b1089bfbca4c9edf3f3af24a))
+* **indexer:** reset an extractor's window when a delta insert fails ([4c60f5d](https://github.com/propeller-heads/tycho/commit/4c60f5d14485759f9e08753fae8225d0b425ac50))
+* **indexer:** resolve code review findings for PR [#1303](https://github.com/propeller-heads/tycho/issues/1303) ([1ddc60d](https://github.com/propeller-heads/tycho/commit/1ddc60daa2168074ffe5df2dc81b00edaeac613b))
+* **indexer:** return an error from DeltaWindow::new instead of panicking ([956010c](https://github.com/propeller-heads/tycho/commit/956010ceeb271356f464861a6268aa95b8dc12e7))
+
+
+### Performance Improvements
+
+* **indexer:** share block messages between the window and the broadcaster ([c3101a5](https://github.com/propeller-heads/tycho/commit/c3101a516e9d0eea77d411b2012025af30b1437f))
+
 ## [0.408.0](https://github.com/propeller-heads/tycho/compare/0.407.2...0.408.0) (2026-09-17)
 
 
