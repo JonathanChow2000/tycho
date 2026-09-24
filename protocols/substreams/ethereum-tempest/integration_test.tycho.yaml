@@ -35,9 +35,8 @@ tests:
           pamm_address: "0x00000003f1ec2379e79f58e12ec6c4f51ee92149"
           self_contained_tokens: "0x5b22307863303261616133396232323366653864306130653563346632376561643930383363373536636332222c22307864616331376639353864326565353233613232303632303639393435393763313364383331656337225d" # ["0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2","0xdac17f958d2ee523a2206206994597c13d831ec7"]
         creation_tx: "0x84ee526d01f198575c653afc6ae14993af4de4dfb72780a21597371805e8c676"
-        # No lane has been written for this pair by `stop_block`, so `getState` reverts
-        # `StaleUpdate`. The maker does quote it later — all three pairs carry a ladder by
-        # block 25963848 — but not within this range.
+        # The maker has never quoted this pair, so `getState` reverts `StaleUpdate` and there is
+        # nothing to simulate against.
         skip_simulation: true
         skip_execution: true
       - id: "0x6b7d03b47715d0315ccb75d25300c242e26b51f5202e1a32df20f239e1d9de35"
@@ -59,20 +58,25 @@ tests:
           pamm_address: "0x00000003f1ec2379e79f58e12ec6c4f51ee92149"
           self_contained_tokens: "0x5b22307861306238363939316336323138623336633164313964346132653965623063653336303665623438222c22307864616331376639353864326565353233613232303632303639393435393763313364383331656337225d" # ["0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48","0xdac17f958d2ee523a2206206994597c13d831ec7"]
         creation_tx: "0xaac181daaf77566de42b6a01a9c4c53eec1a9bd2522f0cd0181c19e31514e573"
-        # No lane has been written for this pair by `stop_block`, so `getState` reverts
-        # `StaleUpdate`. The maker does quote it later — all three pairs carry a ladder by
-        # block 25963848 — but not within this range.
+        # The maker has never quoted this pair, so `getState` reverts `StaleUpdate` and there is
+        # nothing to simulate against.
         skip_simulation: true
         skip_execution: true
 
   - name: test_pair_simulation
     start_block: 25637319
     # The router only prices a lane whose committed `updateTimestamp` is inside `laneWindow`
-    # (currently 12s either side of the settling block). The stop block is the first `updateState`
-    # for the USDC/WETH lane, whose `updateTimestamp` equals this block's timestamp exactly — so
-    # the `override_block_timestamp` the package emits lands the simulation dead centre in the
-    # window. Stopping earlier reverts with `StaleUpdate`.
-    stop_block: 25673321
+    # (currently 12s either side of the settling block), so the stop block has to be one where a
+    # lane was committed in that very block: its `updateTimestamp` equals this block's timestamp
+    # exactly, and the `override_block_timestamp` the package emits lands simulation dead centre
+    # in the window.
+    #
+    # It also has to be past two migrations. The venue only stopped gating settlement on
+    # `allowedTaker` at block 25744018, and the router switched `PrioUpdateRegistry` at 25989123.
+    # Before those, simulation reverts `TakerNotAllowed` and the package decodes `updateState` on
+    # a registry the router no longer reads. This block clears both: implementation
+    # 0x94c4c2a0, registry 0xda7afeed021e…6b81, `openTakerAccess() == true`.
+    stop_block: 26044074
     expected_components:
       - id: "0x6b7d03b47715d0315ccb75d25300c242e26b51f5202e1a32df20f239e1d9de35"
         tokens:
@@ -83,19 +87,11 @@ tests:
           self_contained_tokens: "0x5b22307861306238363939316336323138623336633164313964346132653965623063653336303665623438222c22307863303261616133396232323366653864306130653563346632376561643930383363373536636332225d" # ["0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48","0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"]
         creation_tx: "0x5ffcf6add469b9490dceff2e03c3a86827232c2b0f6ed4478e684442068262a9"
         skip_simulation: false
-        # Execution is skipped because of this test's block range, not because the venue
-        # rejects it. The harness replays encoded calldata against forked state at `stop_block`,
-        # where the live implementation is 0xc85509ed — one that still gates settlement on
-        # `allowedTaker[msg.sender]`, so every fill reverts `TakerNotAllowed` (0xf774ea08).
-        # The upgrade at block 25744018 (implementation 0x40b05afd) turned on the venue's
-        # OPERATOR-settable `openTakerAccess` flag, which bypasses `allowedTaker`; the gate
-        # itself is intact. A non-allowlisted caller settles against it today, which is what
-        # `tycho-execution/contracts/test/protocols/Tempest.t.sol::testSingleSwap` now exercises
-        # at block 25963848 with no taker fixture at all.
-        #
-        # Enabling it here means moving `stop_block` past 25744018 to the next committed
-        # USDC/WETH lane, which grows the indexed range from ~36k blocks to ~330k.
-        skip_execution: true
+        # The venue's OPERATOR-settable `openTakerAccess` flag is on at this block, so a
+        # non-allowlisted caller settles. The `allowedTaker` gate itself is intact -- an OPERATOR
+        # can turn the flag off -- so this asserts the path works today, not that settlement is
+        # permanently ungated.
+        skip_execution: false
       # USDC/WETH above is the only pair the maker has ever quoted. The other two are registered
       # and indexed, so they must be listed here to be skipped — `run_simulation` walks every
       # decoded component, not just the ones under test.
