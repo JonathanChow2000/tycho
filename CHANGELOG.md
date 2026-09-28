@@ -1,3 +1,11 @@
+## [0.427.1](https://github.com/propeller-heads/tycho/compare/0.427.0...0.427.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* **metric:** treat unquoted book sides as having no liquidity ([be37ebb](https://github.com/propeller-heads/tycho/commit/be37ebb1667eec3bc94279068ff7c1d4a64ebcc0))
+* **metric:** treat unquoted book sides as having no liquidity ([#1505](https://github.com/propeller-heads/tycho/issues/1505)) ([802021a](https://github.com/propeller-heads/tycho/commit/802021a319f2ee4463f61c95fcb968725e7d1a15))
+
 ## [0.427.0](https://github.com/propeller-heads/tycho/compare/0.426.0...0.427.0) (2026-09-25)
 
 
