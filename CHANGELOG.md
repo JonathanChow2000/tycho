@@ -1,3 +1,11 @@
+## [0.428.1](https://github.com/propeller-heads/tycho/compare/0.428.0...0.428.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* **integration-test:** simulate swaps without a priority fee ([82dc357](https://github.com/propeller-heads/tycho/commit/82dc35743db011b2714dd03f733a1ae9702c6646))
+* **integration-test:** simulate swaps without a priority fee ([#1504](https://github.com/propeller-heads/tycho/issues/1504)) ([7407cd8](https://github.com/propeller-heads/tycho/commit/7407cd837af3b681312e74f079545f598ca83f8f))
+
 ## [0.428.0](https://github.com/propeller-heads/tycho/compare/0.427.1...0.428.0) (2026-09-28)
 
 
