@@ -1,3 +1,19 @@
+## [0.428.0](https://github.com/propeller-heads/tycho/compare/0.427.1...0.428.0) (2026-09-28)
+
+
+### Features
+
+* **simulation:** keep curve pools priced by trusted rate oracles ([609b899](https://github.com/propeller-heads/tycho/commit/609b8998fc52f6f8935a10915b9921e0cea81822))
+* **simulation:** keep curve pools priced by trusted rate oracles ([#1499](https://github.com/propeller-heads/tycho/issues/1499)) ([81dbd57](https://github.com/propeller-heads/tycho/commit/81dbd5792261993178b687527e1ac1348873aad5))
+
+## [0.427.1](https://github.com/propeller-heads/tycho/compare/0.427.0...0.427.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* **metric:** treat unquoted book sides as having no liquidity ([be37ebb](https://github.com/propeller-heads/tycho/commit/be37ebb1667eec3bc94279068ff7c1d4a64ebcc0))
+* **metric:** treat unquoted book sides as having no liquidity ([#1505](https://github.com/propeller-heads/tycho/issues/1505)) ([802021a](https://github.com/propeller-heads/tycho/commit/802021a319f2ee4463f61c95fcb968725e7d1a15))
+
 ## [0.427.0](https://github.com/propeller-heads/tycho/compare/0.426.0...0.427.0) (2026-09-25)
 
 
