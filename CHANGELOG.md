@@ -1,3 +1,20 @@
+## [0.430.0](https://github.com/propeller-heads/tycho/compare/0.429.0...0.430.0) (2026-09-29)
+
+
+### Features
+
+* index gigaDex V3 on Robinhood Chain ([#1508](https://github.com/propeller-heads/tycho/issues/1508)) ([9e9c725](https://github.com/propeller-heads/tycho/commit/9e9c725ce82f959e69fc84704cae46d1597241ef))
+* **simulation:** accept any Uniswap V3 fee with its tick spacing ([61255a4](https://github.com/propeller-heads/tycho/commit/61255a438907ebbbcc2e6f8f6fadf36649bbaf27))
+* **substreams:** index gigaDex V3 on Robinhood Chain ([743a162](https://github.com/propeller-heads/tycho/commit/743a162d34102bbca579b8296da5ddba42d7e71e))
+* **substreams:** parameterize pancakeswap-v3 type name and protocol fee ([05eda72](https://github.com/propeller-heads/tycho/commit/05eda7220c2cdcb2f9b46468949572296d4bf310))
+
+
+### Bug Fixes
+
+* **execution:** list gigadex_v3 in the Robinhood deployment registry ([7bb02ee](https://github.com/propeller-heads/tycho/commit/7bb02ee10ccaa3d12397b25131c318e32385720f))
+* **substreams:** drop a redundant borrow in pancakeswap-v3 format! ([2338d12](https://github.com/propeller-heads/tycho/commit/2338d127d3d9b1a30d32d86ca9199bd972019a9f))
+* **testing:** decode sushiswap_v3 and robinswap_v3 as UniswapV3State ([83129b4](https://github.com/propeller-heads/tycho/commit/83129b461622d7695ed7621f18268ba8eca7f35f))
+
 ## [0.429.0](https://github.com/propeller-heads/tycho/compare/0.428.1...0.429.0) (2026-09-28)
 
 
