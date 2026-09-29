@@ -21,6 +21,11 @@
 //! Reads and folds take turns behind one read-write lock: a fold takes the write side and
 //! applies one whole block atomically, reads take the read side. Folds are expected to take well
 //! under a millisecond, so blocking is acceptable and a reader never observes half a block.
+//!
+//! Accounts are held behind an `Arc`, because one can hold a large storage map. A reader copies
+//! only the `Arc` under the read lock and does the full copy outside it. A fold that changes an
+//! account a reader still holds copies the account first, under the write lock (`Arc::make_mut`),
+//! so that copy happens at most once per fold instead of once per read.
 
 // The read side is consumed by the state service, ENG-6293.
 #![allow(dead_code)]
@@ -28,7 +33,7 @@
 use std::{
     collections::{hash_map::Entry, HashMap},
     hash::Hash,
-    sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
+    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
     time::Instant,
 };
 
@@ -441,14 +446,14 @@ pub struct EntityCache {
 
 /// The maps behind the lock.
 pub(crate) struct CacheState {
-    accounts: HashMap<Address, CachedAccount>,
+    accounts: HashMap<Address, Arc<CachedAccount>>,
     /// Component states by protocol system, then component id. The system is the extractor name:
     /// the RPC resolves one window per protocol system by extractor name, so both are one string.
     components: HashMap<ProtocolSystem, HashMap<ComponentId, CachedComponentState>>,
 }
 
 impl CacheState {
-    pub(crate) fn account(&self, address: &Address) -> Option<&CachedAccount> {
+    pub(crate) fn account(&self, address: &Address) -> Option<&Arc<CachedAccount>> {
         self.accounts.get(address)
     }
 
@@ -494,8 +499,10 @@ impl EntityCache {
         let StateSnapshot { accounts, components } = snapshot;
         let mut account_entries = HashMap::with_capacity(accounts.len());
         for AccountSnapshot { account, written_at } in accounts {
-            account_entries
-                .insert(account.address.clone(), CachedAccount::from_snapshot(account, written_at));
+            account_entries.insert(
+                account.address.clone(),
+                Arc::new(CachedAccount::from_snapshot(account, written_at)),
+            );
         }
         let mut component_entries: HashMap<
             ProtocolSystem,
@@ -651,10 +658,12 @@ impl CacheState {
                 continue;
             }
             match (self.accounts.get_mut(address), delta) {
-                (Some(entry), delta) => entry.apply_block(delta, balances, at),
+                (Some(entry), delta) => Arc::make_mut(entry).apply_block(delta, balances, at),
                 (None, Some(delta)) if delta.is_creation() => {
-                    self.accounts
-                        .insert(address.clone(), CachedAccount::from_creation(delta, balances, at));
+                    self.accounts.insert(
+                        address.clone(),
+                        Arc::new(CachedAccount::from_creation(delta, balances, at)),
+                    );
                 }
                 (None, _) => warn!(
                     %address,
@@ -709,7 +718,7 @@ mod test {
             .read()
             .account(address)
             .cloned()
-            .map(Account::from)
+            .map(|entry| Account::from(Arc::unwrap_or_clone(entry)))
     }
 
     fn cached_component(cache: &EntityCache, id: &str) -> Option<ProtocolComponentState> {
@@ -1302,6 +1311,35 @@ mod test {
         assert_eq!(
             account.token_balances,
             HashMap::from([(addr(9), account_balance(&address, &addr(9), 7))])
+        );
+    }
+
+    #[test]
+    fn fold_leaves_an_account_a_reader_holds_unchanged() {
+        let cache = EntityCache::new();
+        let address = addr(1);
+        cache
+            .fold(&with_account_delta(msg(1), creation(&address, [(1, 1)], 0, "0x")))
+            .unwrap();
+        let held = cache
+            .read()
+            .account(&address)
+            .cloned()
+            .unwrap();
+
+        cache
+            .fold(&with_account_delta(
+                msg(2),
+                update(&address, fixtures::optional_slots([(1, 12)])),
+            ))
+            .unwrap();
+
+        assert_eq!(Account::from(Arc::unwrap_or_clone(held)).slots, fixtures::slots([(1, 1)]));
+        assert_eq!(
+            cached_account(&cache, &address)
+                .unwrap()
+                .slots,
+            fixtures::slots([(1, 12)])
         );
     }
 

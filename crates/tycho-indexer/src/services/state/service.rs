@@ -149,7 +149,8 @@ impl StateService {
                 window.account_changes(&page, upto)
             })?;
 
-        // Copy the cached entries under the cache read lock; folds wait until it is released.
+        // Copy only the `Arc` of each cached entry under the cache read lock, so folds wait for
+        // pointer copies rather than for whole storage maps.
         let mut entries = Vec::with_capacity(page.len());
         {
             let cache = self.cache.read();
@@ -166,9 +167,11 @@ impl StateService {
             }
         }
 
-        // Apply the window changes on top of each entry, without holding any lock.
+        // Apply the window changes on top of each entry, without holding any lock. The full copy of
+        // an entry happens here, unless a fold already replaced it in the cache.
         let mut accounts = Vec::with_capacity(page.len());
         for (address, entry) in page.iter().zip(entries) {
+            let entry = entry.map(Arc::unwrap_or_clone);
             let changes = window_changes
                 .get(address)
                 .map_or(&[][..], Vec::as_slice);
