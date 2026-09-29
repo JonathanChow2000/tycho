@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use alloy::primitives::U256;
+use alloy::primitives::{Address, U256};
 use itertools::Itertools;
 use tycho_client::feed::{synchronizer::ComponentWithState, BlockHeader};
 use tycho_common::{models::token::Token, simulation::protocol_sim::ProtocolSim, Bytes};
@@ -9,7 +9,10 @@ use super::state::UniswapV4State;
 use crate::{
     evm::protocol::{
         uniswap_v4::{
-            hooks::hook_handler_creator::{instantiate_hook_handler, HookCreationParams},
+            hooks::{
+                hook_handler_creator::{instantiate_hook_handler, HookCreationParams},
+                utils::{has_permission, HookOptions},
+            },
             state::UniswapV4Fees,
         },
         utils::{
@@ -22,6 +25,16 @@ use crate::{
         models::{DecoderContext, TryFromWithBlock},
     },
 };
+
+/// Whether a hook can take part in a swap at all, which it can exactly when its address carries
+/// the `beforeSwap` or the `afterSwap` permission bit. Uniswap V4 encodes a hook's permissions in
+/// the low bits of its address and the pool manager calls only the callbacks those bits allow, so
+/// a hook without either bit cannot change what a swap does. The zero address carries no bits and
+/// so falls out of this check as well.
+fn hook_participates_in_swaps(address: Address) -> bool {
+    has_permission(address, HookOptions::BeforeSwap) ||
+        has_permission(address, HookOptions::AfterSwap)
+}
 
 impl TryFromWithBlock<ComponentWithState, BlockHeader> for UniswapV4State {
     type Error = InvalidSnapshotError;
@@ -162,9 +175,10 @@ impl TryFromWithBlock<ComponentWithState, BlockHeader> for UniswapV4State {
                 InvalidSnapshotError::ValueError(err.to_string())
             })?;
 
-        // Both substreams variants emit `hooks` for every pool, so the attribute's presence says
-        // nothing about whether a hook exists — the zero address is what "no hook" looks like on
-        // the wire. Such a pool is a plain V4 pool on every chain: no handler, no chain needed.
+        // Every Uniswap V4 component carries a `hooks` attribute, so its presence says nothing
+        // about whether the pool has a hook: the zero address is what "no hook" looks like on the
+        // wire, and the length check rejects a malformed value. A pool whose hook cannot take part
+        // in a swap is a plain V4 pool too, on every chain: no handler, no chain needed.
         let hook_address = hook_attribute
             .map(bytes_to_address)
             .transpose()
@@ -173,7 +187,7 @@ impl TryFromWithBlock<ComponentWithState, BlockHeader> for UniswapV4State {
                     "hooks attribute is not a 20-byte address: {err}"
                 ))
             })?
-            .filter(|address| !address.is_zero());
+            .filter(|address| hook_participates_in_swaps(*address));
 
         if let Some(hook_address) = hook_address {
             // Merge state attributes into static_attributes for hook creation
@@ -468,11 +482,15 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    /// What a pool with no hook looks like on the wire: both substreams variants emit the `hooks`
-    /// attribute for every pool, zero-valued when there is no hook.
+    /// What a pool with no hook looks like on the wire: every Uniswap V4 component carries the
+    /// `hooks` attribute, zero-valued when there is no hook.
     const ZERO_HOOK: &str = "0x0000000000000000000000000000000000000000";
-    /// A hook address with no native handler registered for it on any chain.
+    /// A hook address with no native handler registered for it on any chain. Its low bits carry
+    /// `beforeSwap` (bit 7) and `afterSwap` (bit 6), so it does take part in swaps.
     const UNKNOWN_HOOK: &str = "0x00000000000000000000000000000000000000c4";
+    /// A hook that only carries the add- and remove-liquidity permissions (bits 11 and 10) and
+    /// neither swap bit, so the pool manager never calls it during a swap.
+    const LIQUIDITY_ONLY_HOOK: &str = "0x0000000000000000000000000000000000000c00";
 
     fn hookless_token(address: &str, symbol: &str, decimals: u32) -> Token {
         Token::new(
@@ -616,7 +634,11 @@ mod tests {
             .expect("a pool with a zero hook address must decode on every chain");
 
         assert!(decoded.hook.is_none(), "a zero hook address must not install a hook handler");
+        assert_quotes_like_the_hookless_reference(&decoded);
+    }
 
+    /// Every quote a decoded pool answers matches the same pool built directly with no hook.
+    fn assert_quotes_like_the_hookless_reference(decoded: &UniswapV4State) {
         let reference = reference_hookless_state();
         let (t0, t1) = (token0(), token1());
 
@@ -656,8 +678,28 @@ mod tests {
         }
     }
 
-    /// A non-zero hook with no registered handler is rejected rather than quoted as if the hook
-    /// were absent, and it still needs a chain to decide that.
+    /// A hook that carries neither swap permission cannot be called during a swap, so it is
+    /// treated exactly like the zero address: no handler, no chain needed, plain V4 pricing on
+    /// every chain, including the chains where the generic VM handler is enabled.
+    #[tokio::test]
+    #[rstest]
+    #[case::no_chain(None)]
+    #[case::robinhood(Some(Chain::Robinhood))]
+    #[case::ethereum(Some(Chain::Ethereum))]
+    async fn hook_without_swap_permissions_decodes_as_hookless(#[case] chain: Option<Chain>) {
+        let decoded = decode_with_chain(hookless_snapshot_with_hook(LIQUIDITY_ONLY_HOOK), chain)
+            .await
+            .expect("a hook that cannot take part in a swap must decode on every chain");
+
+        assert!(
+            decoded.hook.is_none(),
+            "a hook without beforeSwap or afterSwap must not install a hook handler"
+        );
+        assert_quotes_like_the_hookless_reference(&decoded);
+    }
+
+    /// A non-zero hook that does take part in swaps but has no registered handler is rejected
+    /// rather than quoted as if the hook were absent, and it still needs a chain to decide that.
     #[tokio::test]
     #[rstest]
     #[case::robinhood_fails_closed(Some(Chain::Robinhood), "unsupported uniswap v4 hook")]
