@@ -1409,7 +1409,7 @@ dependencies = [
 
 [[package]]
 name = "ethereum-uniswap-v4-with-hooks"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "ethabi 18.0.0",
