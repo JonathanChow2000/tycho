@@ -20,8 +20,8 @@ pub struct FeeTier {
 impl FeeTier {
     /// Creates a fee tier from a fee in hundredths of a bip and a tick spacing.
     ///
-    /// Errors when `fee` is not below 1_000_000 (100%) or `tick_spacing` is zero, the same bounds
-    /// the Uniswap V3 factory enforces when a fee amount is enabled.
+    /// Errors when `fee` is not below 1_000_000 (100%), which the swap math divides by, or when
+    /// `tick_spacing` is zero.
     pub fn new(fee: u32, tick_spacing: u16) -> Result<Self, SimulationError> {
         if fee >= FEE_DENOMINATOR {
             return Err(SimulationError::InvalidInput(
@@ -63,9 +63,9 @@ impl From<FeeAmount> for FeeTier {
     }
 }
 
-/// Serde for `UniswapV3State::fee`. States serialized before arbitrary fees were supported store
-/// the fee as a `FeeAmount` variant name. Fees that have a variant keep that form so older readers
-/// still load the output; any other fee is written as a number.
+/// Serde for `UniswapV3State::fee`. A fee that has a `FeeAmount` variant is written as that
+/// variant's name, the form readers that know only `FeeAmount` expect; any other fee is written as
+/// a number. Both forms are read.
 pub(super) mod fee_serde {
     use super::*;
 

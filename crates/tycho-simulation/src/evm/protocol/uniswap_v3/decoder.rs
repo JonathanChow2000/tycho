@@ -17,7 +17,8 @@ impl TryFromWithBlock<ComponentWithState, BlockHeader> for UniswapV3State {
     type Error = InvalidSnapshotError;
 
     /// Decodes a `ComponentWithState` into a `UniswapV3State`. Errors with a `InvalidSnapshotError`
-    /// if the snapshot is missing any required attributes or if the fee amount is not supported.
+    /// if the snapshot is missing any required attributes, if its fee and tick spacing are out of
+    /// range, or if it has no `tick_spacing` attribute and its fee has no `FeeAmount` variant.
     async fn try_from_with_header(
         snapshot: ComponentWithState,
         _block: BlockHeader,

@@ -22,7 +22,6 @@
   indexes the factory. `CLPool.initialize` sets a 10% protocol fee (`1000`) whatever the fee tier,
   so the manifest passes `default_protocol_fee=1000`. Components are emitted as `gigadex_v3_pool`.
   The protocol fee is taken out of the LP fee. It does not change the trader's amount out or the
-  event-derived balances. The factory enables
-  `(fee, tickSpacing)` pairs that canonical Uniswap V3 does not, such as fee `50` with spacing `10`
-  and fee `200` with spacing `4`. Both values are emitted as the `fee` and `tick_spacing` static
-  attributes, read from `PoolCreated`.
+  event-derived balances. The factory enables `(fee, tickSpacing)` pairs that canonical Uniswap V3
+  does not, such as fee `50` with spacing `10` and fee `200` with spacing `4`. Both values are
+  emitted as the `fee` and `tick_spacing` static attributes, read from `PoolCreated`.

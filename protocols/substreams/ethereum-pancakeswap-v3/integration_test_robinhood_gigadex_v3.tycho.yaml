@@ -9,7 +9,7 @@ tests:
   # WETH / USDG at fee 50 (0.005%), tick spacing 10: the pool with the most activity on the factory.
   # Its fee has no `FeeAmount` variant, so it only simulates through the `tick_spacing` attribute.
   - name: test_weth_usdg_fee_50_pool
-    # PoolCreated, SetFeeProtocol, SetLmPoolEvent and Initialize all land in the creation tx.
+    # PoolCreated, Initialize, SetLmPoolEvent and SetFeeProtocol all land in the creation tx.
     start_block: 59352731
     # First Mint at 59360128, first Swap at 59360246.
     stop_block: 59360246
@@ -24,7 +24,7 @@ tests:
         creation_tx: "0x363e7f26cf7fc11e3a108ac2ae316274bfa5ab83d3f551f754ad25c85b25506f"
         skip_simulation: false
         skip_execution: false
-  # USDG / GLD at fee 200 with tick spacing 4, where canonical Uniswap V3 would use spacing 2.
+  # USDG / GLD at fee 200 with tick spacing 4, where the `FeeAmount` mapping implies spacing 2.
   - name: test_usdg_gld_fee_200_spacing_4_pool
     start_block: 56404708
     # First Mint at 56406113, first Swap at 56406452.
