@@ -1376,51 +1376,17 @@ impl TestRunner {
         let router_overwrites_data =
             execution::create_router_overwrites_data(self.chain, protocol_system)?;
 
-        info!("Executing {} simulations in batches ...", filtered_execution_data.len());
+        info!("Executing {} simulations ...", filtered_execution_data.len());
 
-        // Split execution data into smaller batches to avoid RPC request size limits
-        // This happens because our overwrites are colossal
-        const BATCH_SIZE: usize = 30;
-        let execution_batches: Vec<HashMap<String, TychoExecutionInput>> = filtered_execution_data
-            .clone()
-            .into_iter()
-            .collect::<Vec<_>>()
-            .chunks(BATCH_SIZE)
-            .map(|chunk| chunk.iter().cloned().collect())
-            .collect();
-
-        let mut all_results = HashMap::new();
-
-        // Process each batch sequentially
-        for (batch_index, batch) in execution_batches.iter().enumerate() {
-            info!(
-                "Processing execution batch {} of {} ({} simulations)",
-                batch_index + 1,
-                execution_batches.len(),
-                batch.len()
-            );
-
-            let batch_results = simulate_swap_transaction(
-                &rpc_tools,
-                batch.clone(),
-                block,
-                router_overwrites_data.clone(),
-                None,
-            )
-            .await;
-
-            let batch_results = match batch_results {
-                Ok(results) => results,
-                Err((error, _, _)) => {
-                    error!("Batch {} failed: {:#}", batch_index + 1, error);
-                    return Err(error);
-                }
-            };
-
-            all_results.extend(batch_results);
-        }
-
-        let results = all_results;
+        let results = simulate_swap_transaction(
+            &rpc_tools,
+            filtered_execution_data.clone(),
+            block,
+            router_overwrites_data,
+            None,
+        )
+        .await
+        .map_err(|(error, _, _)| error)?;
 
         let mut success_count = 0;
         let mut failure_count = 0;
