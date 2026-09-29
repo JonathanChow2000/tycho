@@ -281,7 +281,11 @@ where
         &self,
         request: dto::StateRequestBody,
     ) -> Result<dto::StateRequestResponse, RpcError> {
-        if let Some(service) = self.serving_state_service() {
+        // The cache serves explicit ids only; listing every entity stays on the database path.
+        if let Some(service) = self
+            .serving_state_service()
+            .filter(|_| request.contract_ids.is_some())
+        {
             match service.contract_state(&request) {
                 Ok(response) => return Ok(response),
                 Err(StateServiceError::VersionTooOld) => count_db_path("contract_state"),
@@ -522,7 +526,11 @@ where
         &self,
         request: dto::ProtocolStateRequestBody,
     ) -> Result<dto::ProtocolStateRequestResponse, RpcError> {
-        if let Some(service) = self.serving_state_service() {
+        // The cache serves explicit ids only; listing every entity stays on the database path.
+        if let Some(service) = self
+            .serving_state_service()
+            .filter(|_| request.protocol_ids.is_some())
+        {
             match service.protocol_state(&request) {
                 Ok(response) => return Ok(response),
                 Err(StateServiceError::VersionTooOld) => count_db_path("protocol_state"),
@@ -1833,6 +1841,62 @@ mod tests {
         assert_eq!(state.accounts[0], expected.into());
         assert_eq!(state.accounts[1], buf_expected.into());
         assert_eq!(state.pagination.total, 2);
+    }
+
+    /// In serve mode a request without ids is answered by the database path, which lists every
+    /// contract; the cache serves explicit ids only.
+    #[tokio::test]
+    async fn test_get_contract_state_without_ids_uses_the_database_in_serve_mode() {
+        use crate::services::state::{
+            cache::EntityCache,
+            window::{new_windows, WindowConfig},
+        };
+
+        let account = Account::new(
+            Chain::Ethereum,
+            Bytes::from(1u64).lpad(20, 0),
+            "account".to_owned(),
+            evm_contract_slots([(0, 2)]),
+            Bytes::from(101u8).lpad(32, 0),
+            HashMap::new(),
+            Bytes::from("C0C0C0"),
+            Bytes::zero(32),
+            Bytes::zero(32),
+            Bytes::zero(32),
+            None,
+        );
+        let mut gw = MockGateway::new();
+        let mock_response = Ok(WithTotal { entity: vec![account.clone()], total: Some(1) });
+        gw.expect_get_contracts()
+            .return_once(|_, _, _, _, _| Box::pin(async move { mock_response }));
+        let service = StateService::new(
+            new_windows(["uniswap_v2"], WindowConfig::default()),
+            Arc::new(EntityCache::new()),
+        );
+        let req_handler = RpcHandler::new(
+            gw,
+            None,
+            MockEntryPointTracer::new(),
+            PlansConfig::default(),
+            vec![],
+            vec![],
+        )
+        .with_state_service(EntityCacheSetup::Serve(Arc::new(service)));
+
+        let request = dto::StateRequestBody {
+            contract_ids: None,
+            protocol_system: "uniswap_v2".to_string(),
+            version: dto::VersionParam { timestamp: Some(Utc::now().naive_utc()), block: None },
+            chain: dto::Chain::Ethereum,
+            pagination: dto::PaginationParams::default(),
+        };
+        let state = req_handler
+            .get_contract_state_routed(request)
+            .await
+            .unwrap();
+
+        assert_eq!(state.accounts, vec![account.into()]);
+        assert_eq!(state.pagination.total, 1);
     }
 
     /// The requested address list is sliced to the page before the db call, so the db must not

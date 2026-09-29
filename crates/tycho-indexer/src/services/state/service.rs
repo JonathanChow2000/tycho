@@ -116,7 +116,8 @@ impl StateService {
     /// [`StateServiceError::VersionTooOld`] when the cache cannot rebuild the version. Otherwise
     /// [`StateServiceError::Rpc`] with:
     ///
-    /// - `RpcError::Parse` (400) when `contract_ids` is `None`: the cache serves explicit ids only.
+    /// - `RpcError::Parse` (400) when `contract_ids` is `None`: the cache serves explicit ids only,
+    ///   and the RPC handler sends a request without ids to the database path.
     /// - `RpcError::Storage(StorageError::NotFound("Contract", ..))` when an address is neither
     ///   cached nor changed by a delta in the window.
     /// - `RpcError::Parse` (400) when the version is malformed, or `protocol_system` is empty or
