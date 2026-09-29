@@ -123,9 +123,8 @@ impl StateService {
     ///   has no window. Today this silently reads the database.
     /// - `RpcError::DeltasError` (500) when the window cannot be read or a change cannot be merged,
     ///   as on the database path.
-    /// - `RpcError::Storage(StorageError::NotFound("Block", ..))` when the version is a block
-    ///   number above the tip. tycho-client retries a body that contains `"Could not find Block"`
-    ///   and may blacklist a component on any other text, so the entity name must be `Block`.
+    /// - `RpcError::Storage(StorageError::NotFound("Version", ..))` when the version is a block
+    ///   number above the tip, with the database path's body.
     pub(crate) fn contract_state(
         &self,
         request: &dto::StateRequestBody,
@@ -345,7 +344,7 @@ impl StateService {
             WindowResolution::BelowFloor => return Err(StateServiceError::VersionTooOld),
             WindowResolution::AboveTip => {
                 return Err(RpcError::Storage(StorageError::NotFound(
-                    "Block".to_string(),
+                    "Version".to_string(),
                     format!("{version:?}"),
                 ))
                 .into())
@@ -579,21 +578,21 @@ mod test {
     }
 
     #[test]
-    fn contract_state_above_the_tip_is_a_block_not_found() {
+    fn contract_state_above_the_tip_is_a_version_not_found() {
         let harness = accounts();
 
         let result = harness
             .service
             .contract_state(&contract_request(vec![addr(1)], at_block(6)));
 
-        let Err(StateServiceError::Rpc(err @ RpcError::Storage(StorageError::NotFound(..)))) =
-            result
-        else {
+        // The body the database path answers with: the storage error alone.
+        let Err(StateServiceError::Rpc(RpcError::Storage(err))) = result else {
             panic!("expected a not-found error, got {result:?}");
         };
-        assert!(err
-            .to_string()
-            .contains("Could not find Block"));
+        assert_eq!(
+            err.to_string(),
+            "Could not find Version with id `Block(Number((Ethereum, 6)))`!"
+        );
     }
 
     #[test]
