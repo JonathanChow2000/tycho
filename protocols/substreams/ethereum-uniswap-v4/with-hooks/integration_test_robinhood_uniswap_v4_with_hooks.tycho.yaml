@@ -5,15 +5,18 @@ protocol_type_names:
   - "uniswap_v4_pool"
 protocol_system: "uniswap_v4_hooks"
 module_name: "map_pons_enriched_block_changes"
+# Left empty, as on every other Robinhood config: the harness snapshots an account's storage with
+# `debug_storageRangeAt`, which Robinhood's Nitro RPCs do not serve, and the native Pons path prices
+# a pool from its attributes alone, without account state.
 initialized_accounts:
-  - "0x8366a39CC670B4001A1121B8F6A443A643e40951" # pool manager
 tests:
   # Pons V2 MemeHook pool, creatorTaxBps 100 and hookFeeBps 100, registered in the transaction that
   # initialized it. The fee terms are decoded from the hook's storage writes in that transaction,
-  # so this test only passes on extended blocks.
+  # so this test only passes on extended blocks. The range stops at 58759104, the block in which
+  # the pool changes state: stopping later leaves the harness validating an idle pool.
   - name: test_pons_pool_creation
     start_block: 58759095
-    stop_block: 58759199
+    stop_block: 58759104
     expected_components:
       - id: "0xc96847cc43f7595aafcbc1c99d335cb91be7ce1107524c87030f48a716a5f289"
         tokens:
