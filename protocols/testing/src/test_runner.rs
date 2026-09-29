@@ -1268,11 +1268,16 @@ impl TestRunner {
                         continue;
                     }
 
-                    let executors_json = json!({
-                        (self.chain.to_string()): {
-                            (protocol_system): EXECUTOR_ADDRESS
-                        }
-                    });
+                    // Swaps are grouped before their encoder is looked up, and grouping folds
+                    // `uniswap_v4_hooks` into `uniswap_v4` because both swap through the same
+                    // PoolManager. Registering the executor under both names lets the lookup
+                    // find it whichever of the two the group ends up carrying.
+                    let mut executors = serde_json::Map::new();
+                    executors.insert(protocol_system.to_string(), json!(EXECUTOR_ADDRESS));
+                    if protocol_system == "uniswap_v4_hooks" {
+                        executors.insert("uniswap_v4".to_string(), json!(EXECUTOR_ADDRESS));
+                    }
+                    let executors_json = json!({ (self.chain.to_string()): executors });
                     let chain_model = self.chain;
                     let (solution, calldata) = encode_swap(
                         component,
