@@ -31,9 +31,10 @@ use std::{
 };
 
 use thiserror::Error;
+use tracing::error;
 use tycho_common::{
     dto::{self, PaginationResponse},
-    models::{contract::Account, PaginationParams},
+    models::{contract::Account, protocol::ProtocolComponentState, MergeError, PaginationParams},
     storage::{BlockOrTimestamp, StorageError, WriteTimestamp},
     Bytes,
 };
@@ -232,8 +233,88 @@ impl StateService {
         &self,
         request: &dto::ProtocolStateRequestBody,
     ) -> Result<dto::ProtocolStateRequestResponse, StateServiceError> {
-        let _ = request;
-        todo!("serve protocol_state from the cache")
+        let ids = request
+            .protocol_ids
+            .as_deref()
+            .ok_or_else(|| RpcError::Parse("protocol_ids are required".to_string()))?;
+        // Slice the page out of the requested ids, like the database path does.
+        let pagination = PaginationParams::from(&request.pagination);
+        let page: Vec<&str> = ids
+            .iter()
+            .skip(pagination.offset() as usize)
+            .take(pagination.page_size as usize)
+            .map(String::as_str)
+            .collect();
+        let system = &request.protocol_system;
+        // Resolve the version and copy the window changes for the page under one window lock, so
+        // both see the same blocks.
+        let (version, window_changes) =
+            self.read_window(system, &request.version, |window, upto| {
+                window.component_changes(&page, upto)
+            })?;
+
+        // Copy the cached entries under the cache read lock; folds wait until it is released.
+        let mut entries = Vec::with_capacity(page.len());
+        {
+            let cache = self.cache.read();
+            for id in &page {
+                let entry = cache.component(system, id);
+                // One extractor owns each component, so the entry can pass `version` only if this
+                // window's own fold lands between the capture and this read with `version` at the
+                // window floor. Not expected: log it and let the database path answer.
+                if let Some(entry) = entry.filter(|entry| entry.updated_at() > version) {
+                    error!(
+                        component = %id,
+                        entry = entry.updated_at().block_number(),
+                        version = version.block_number(),
+                        "Cached component is newer than the requested version"
+                    );
+                    return Err(StateServiceError::VersionTooOld);
+                }
+                entries.push(entry.cloned());
+            }
+        }
+
+        // Apply the window changes on top of each entry, without holding any lock, with the
+        // database path's merge. The changes hold absolute values in block order, so re-applying
+        // one that a fold already moved into the entry leaves the same state.
+        let mut states = Vec::with_capacity(page.len());
+        for (id, entry) in page.iter().zip(entries) {
+            // Not cached: start from an empty state, as the database path does for an id it does
+            // not hold. An id the window never changed is served as that empty state.
+            // TODO: serve unknown ids the same way for accounts and components: both as an empty
+            // entity or both as an error.
+            let mut state = entry.map_or_else(
+                || ProtocolComponentState::new(id, HashMap::new(), HashMap::new()),
+                ProtocolComponentState::from,
+            );
+            let merge_error = |err: MergeError| RpcError::from(PendingDeltasError::from(err));
+            for change in window_changes
+                .get(*id)
+                .into_iter()
+                .flatten()
+            {
+                if let Some(delta) = &change.delta {
+                    state
+                        .apply_state_delta(delta)
+                        .map_err(merge_error)?;
+                }
+                if let Some(balances) = &change.balances {
+                    state
+                        .apply_balance_delta(balances)
+                        .map_err(merge_error)?;
+                }
+            }
+            if !request.include_balances {
+                state.balances.clear();
+            }
+            states.push(dto::ResponseProtocolState::from(state));
+        }
+
+        Ok(dto::ProtocolStateRequestResponse::new(
+            states,
+            PaginationResponse::new(pagination.page, pagination.page_size, ids.len() as i64),
+        ))
     }
 
     /// Resolves `version` in the window of `protocol_system` and runs `read` on that window, up
@@ -278,9 +359,14 @@ impl StateService {
 
 #[cfg(test)]
 mod test {
+    use std::collections::HashSet;
+
     use rstest::rstest;
     use tycho_common::models::{
-        blockchain::BlockAggregatedChanges, contract::AccountDelta, Chain, ChangeType,
+        blockchain::BlockAggregatedChanges,
+        contract::AccountDelta,
+        protocol::{ComponentBalance, ProtocolComponent, ProtocolComponentStateDelta},
+        Chain, ChangeType,
     };
 
     use super::*;
@@ -357,6 +443,35 @@ mod test {
         m
     }
 
+    fn with_component(mut m: BlockAggregatedChanges, id: &str) -> BlockAggregatedChanges {
+        m.new_protocol_components.insert(
+            id.to_string(),
+            ProtocolComponent {
+                id: id.to_string(),
+                protocol_system: SYSTEM.to_string(),
+                ..Default::default()
+            },
+        );
+        m
+    }
+
+    fn with_component_balance(mut m: BlockAggregatedChanges, id: &str) -> BlockAggregatedChanges {
+        m.component_balances.insert(
+            id.to_string(),
+            HashMap::from([(
+                addr(9),
+                ComponentBalance {
+                    token: addr(9),
+                    balance: Bytes::from(1u64),
+                    balance_float: 1.0,
+                    modify_tx: Bytes::default(),
+                    component_id: id.to_string(),
+                },
+            )]),
+        );
+        m
+    }
+
     /// Account `addr(1)` created in block 1, slot 1 set to `n` in each block `n` up to 5. With
     /// depth 2 the cache holds blocks 1-3 and the window blocks 4-5.
     fn accounts() -> Harness {
@@ -368,12 +483,42 @@ mod test {
         harness
     }
 
+    /// Component `c1` created in block 1 with a balance, attribute `x` set to `n` in each block
+    /// `n` up to 5. With depth 2 the cache holds blocks 1-3 and the window blocks 4-5.
+    fn components() -> Harness {
+        let harness = Harness::new(2);
+        harness.push(testing::with_state_delta(
+            with_component_balance(with_component(msg(1), "c1"), "c1"),
+            "c1",
+            1,
+        ));
+        for n in 2..=5 {
+            harness.push(testing::with_state_delta(msg(n), "c1", n));
+        }
+        harness
+    }
+
     fn contract_request(ids: Vec<Bytes>, version: dto::VersionParam) -> dto::StateRequestBody {
         dto::StateRequestBody {
             contract_ids: Some(ids),
             protocol_system: SYSTEM.to_string(),
             version,
             chain: dto::Chain::Ethereum,
+            pagination: dto::PaginationParams::new(0, 100),
+        }
+    }
+
+    fn protocol_request(ids: &[&str], version: dto::VersionParam) -> dto::ProtocolStateRequestBody {
+        dto::ProtocolStateRequestBody {
+            protocol_ids: Some(
+                ids.iter()
+                    .map(|id| id.to_string())
+                    .collect(),
+            ),
+            protocol_system: SYSTEM.to_string(),
+            chain: dto::Chain::Ethereum,
+            include_balances: true,
+            version,
             pagination: dto::PaginationParams::new(0, 100),
         }
     }
@@ -541,5 +686,133 @@ mod test {
                 "{result:?}"
             );
         }
+    }
+
+    #[rstest]
+    #[case::number_in_window(at_block(4), 4)]
+    #[case::default_is_the_tip(dto::VersionParam::default(), 5)]
+    fn protocol_state_serves_the_cached_entry_with_the_window_changes_up_to_the_version(
+        #[case] version: dto::VersionParam,
+        #[case] expected: u64,
+    ) {
+        let harness = components();
+
+        let response = harness
+            .service
+            .protocol_state(&protocol_request(&["c1"], version))
+            .unwrap();
+
+        assert_eq!(response.states.len(), 1);
+        assert_eq!(response.states[0].attributes["x"], Bytes::from(expected));
+        assert_eq!(response.states[0].balances[&addr(9)], Bytes::from(1u64));
+    }
+
+    #[test]
+    fn protocol_state_removes_balances_when_not_requested() {
+        let harness = components();
+        let mut request = protocol_request(&["c1"], dto::VersionParam::default());
+        request.include_balances = false;
+
+        let response = harness
+            .service
+            .protocol_state(&request)
+            .unwrap();
+
+        assert!(response.states[0].balances.is_empty());
+    }
+
+    #[test]
+    fn protocol_state_keeps_deleted_attributes_deleted() {
+        let harness = components();
+        let mut m = msg(6);
+        m.state_deltas.insert(
+            "c1".to_string(),
+            ProtocolComponentStateDelta {
+                component_id: "c1".to_string(),
+                deleted_attributes: HashSet::from(["x".to_string()]),
+                ..Default::default()
+            },
+        );
+        harness.push(m);
+
+        let response = harness
+            .service
+            .protocol_state(&protocol_request(&["c1"], dto::VersionParam::default()))
+            .unwrap();
+
+        assert!(!response.states[0]
+            .attributes
+            .contains_key("x"));
+    }
+
+    #[test]
+    fn protocol_state_serves_uncached_ids_like_the_database_path() {
+        let harness = components();
+        harness.push(testing::with_state_delta(
+            testing::with_state_delta(with_component(msg(6), "c2"), "c2", 6),
+            "c3",
+            6,
+        ));
+
+        let response = harness
+            .service
+            .protocol_state(&protocol_request(
+                &["c1", "c2", "c3", "c4"],
+                dto::VersionParam::default(),
+            ))
+            .unwrap();
+
+        let ids: Vec<&str> = response
+            .states
+            .iter()
+            .map(|state| state.component_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["c1", "c2", "c3", "c4"]);
+        assert_eq!(response.states[1].attributes["x"], Bytes::from(6u64));
+        assert_eq!(response.states[2].attributes["x"], Bytes::from(6u64));
+        assert!(response.states[3].attributes.is_empty() && response.states[3].balances.is_empty());
+    }
+
+    #[test]
+    fn protocol_state_reapplies_a_block_already_folded_into_the_entry() {
+        let harness = components();
+        // A fold that lands after the capture: block 4 is both in the window and in the entry.
+        harness
+            .cache
+            .fold(&testing::with_state_delta(msg(4), "c1", 4))
+            .unwrap();
+
+        let response = harness
+            .service
+            .protocol_state(&protocol_request(&["c1"], dto::VersionParam::default()))
+            .unwrap();
+
+        assert_eq!(response.states[0].attributes["x"], Bytes::from(5u64));
+    }
+
+    #[test]
+    fn protocol_state_is_too_old_when_the_cached_entry_is_newer_than_the_version() {
+        let harness = components();
+        harness
+            .cache
+            .fold(&testing::with_state_delta(msg(7), "c1", 7))
+            .unwrap();
+
+        let result = harness
+            .service
+            .protocol_state(&protocol_request(&["c1"], dto::VersionParam::default()));
+
+        assert!(matches!(result, Err(StateServiceError::VersionTooOld)));
+    }
+
+    #[test]
+    fn protocol_state_below_the_window_is_too_old() {
+        let harness = components();
+
+        let result = harness
+            .service
+            .protocol_state(&protocol_request(&["c1"], at_block(3)));
+
+        assert!(matches!(result, Err(StateServiceError::VersionTooOld)));
     }
 }
