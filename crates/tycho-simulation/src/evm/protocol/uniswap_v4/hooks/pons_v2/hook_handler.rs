@@ -183,9 +183,9 @@ impl HookHandler for PonsV2HookHandler {
         Ok(f64::from(combined) / BPS_DENOMINATOR as f64)
     }
 
-    /// Always fails so that `UniswapV4State` derives the spot price from the pool itself. The
-    /// hook never moves the price: `_afterSwap` runs after the core swap math and only accrues
-    /// balances.
+    /// Never consulted, because [`PonsV2HookHandler::unspecified_fee_amount`] always answers and
+    /// the pool then prices the hook analytically. It fails rather than guess: the hook does not
+    /// move the price, `_afterSwap` runs after the core swap math and only accrues balances.
     fn spot_price(&self, _base: &Token, _quote: &Token) -> Result<f64, SimulationError> {
         Err(SimulationError::RecoverableError(
             "spot_price is not implemented for PonsV2HookHandler".into(),

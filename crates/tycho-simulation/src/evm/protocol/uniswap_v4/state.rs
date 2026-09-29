@@ -450,15 +450,15 @@ impl UniswapV4State {
         Ok(add_fee_markup(price, fee))
     }
 
-    /// The share of a swap's output that `hook` keeps, as a fraction of one, or `None` when the
-    /// hook does not model its fee analytically and has to be simulated instead.
+    /// The share of a swap's output that the pool's hook keeps, as a fraction of one. `None`
+    /// when the pool has no hook, or when its hook does not model its fee analytically and has
+    /// to be simulated instead.
     ///
     /// Fails if the hook would keep the whole output or more, which is not a rate a price can be
     /// marked up by.
-    fn hook_fee_rate(
-        hook: &dyn HookHandler,
-        zero_for_one: bool,
-    ) -> Result<Option<f64>, SimulationError> {
+    fn hook_fee_rate(&self, zero_for_one: bool) -> Result<Option<f64>, SimulationError> {
+        let Some(hook) = &self.hook else { return Ok(None) };
+
         let probe = U256::from(10u64).pow(U256::from(HOOK_FEE_PROBE_EXP));
         let Some(fee) = hook.unspecified_fee_amount(probe, zero_for_one)? else {
             return Ok(None);
@@ -486,15 +486,17 @@ impl ProtocolSim for UniswapV4State {
 
     fn spot_price(&self, base: &Token, quote: &Token) -> Result<f64, SimulationError> {
         if let Some(hook) = &self.hook {
+            // Buying `base` means selling `quote` into the pool, so the hook sees a swap whose
+            // input is `quote` and whose output, the leg it charges, is `base`. A hook that
+            // prices that cut analytically needs no simulation: its price is the pool's own buy
+            // price marked up by the cut.
+            if let Some(rate) = self.hook_fee_rate(quote < base)? {
+                return Ok(add_fee_markup(self.core_spot_price(base, quote)?, rate));
+            }
+
             match hook.spot_price(base, quote) {
                 Ok(price) => return Ok(price),
                 Err(SimulationError::RecoverableError(_)) => {
-                    // Buying `base` means selling `quote` into the pool, so the hook sees a swap
-                    // whose input is `quote` and whose output, the leg it charges, is `base`.
-                    if let Some(rate) = Self::hook_fee_rate(hook.as_ref(), quote < base)? {
-                        return Ok(add_fee_markup(self.core_spot_price(base, quote)?, rate));
-                    }
-
                     // Calculate spot price by swapping two amounts and use the approximation
                     // to get the derivative, following the pattern from vm/state.rs
 
@@ -1742,6 +1744,9 @@ mod tests {
         /// Share of the output the hook reports analytically, in basis points. `None` models a
         /// hook that cannot price its fee without a simulation.
         analytic_fee_bps: Option<u32>,
+        /// Price the hook answers `spot_price` with. `None` models a hook that leaves the price
+        /// to the pool by failing recoverably.
+        spot_price_override: Option<u64>,
     }
 
     impl HookHandler for AfterSwapTestHook {
@@ -1772,7 +1777,10 @@ mod tests {
         }
 
         fn spot_price(&self, _: &Token, _: &Token) -> Result<f64, SimulationError> {
-            Err(SimulationError::RecoverableError("not implemented".into()))
+            match self.spot_price_override {
+                Some(price) => Ok(price as f64),
+                None => Err(SimulationError::RecoverableError("not implemented".into())),
+            }
         }
 
         fn unspecified_fee_amount(
@@ -1829,6 +1837,7 @@ mod tests {
             address: construct_hook_address(hook_options),
             delta: I128::unchecked_from(AFTER_SWAP_TEST_HOOK_DELTA),
             analytic_fee_bps: None,
+            spot_price_override: None,
         })
     }
 
@@ -1841,6 +1850,25 @@ mod tests {
             ]),
             delta: I128::ZERO,
             analytic_fee_bps: Some(analytic_fee_bps),
+            spot_price_override: None,
+        })
+    }
+
+    /// The price a test hook answers `spot_price` with when it is asked for one. Far from any
+    /// price the test pool could quote, so a test cannot confuse the two.
+    const TEST_HOOK_SPOT_PRICE: u64 = 1_000_000;
+
+    /// A hook that answers `spot_price` with [`TEST_HOOK_SPOT_PRICE`], and prices its fee
+    /// analytically when `analytic_fee_bps` is `Some`.
+    fn pricing_test_hook(analytic_fee_bps: Option<u32>) -> Box<dyn HookHandler> {
+        Box::new(AfterSwapTestHook {
+            address: construct_hook_address(&[
+                HookOptions::AfterSwap,
+                HookOptions::AfterSwapReturnsDelta,
+            ]),
+            delta: I128::ZERO,
+            analytic_fee_bps,
+            spot_price_override: Some(TEST_HOOK_SPOT_PRICE),
         })
     }
 
@@ -2034,6 +2062,54 @@ mod tests {
             .expect("the hook prices its own fee");
 
         assert!((executed / spot - 1.0).abs() < 1e-4, "executed {executed}, quoted {spot}");
+    }
+
+    /// A hook that prices its fee analytically is priced from the pool, not from whatever its
+    /// own `spot_price` answers: the analytic rate is the whole of what it does to the price,
+    /// and asking the handler would cost a simulation for no gain.
+    #[rstest]
+    #[case::base_is_currency0(true)]
+    #[case::base_is_currency1(false)]
+    fn test_spot_price_prefers_an_analytic_fee_over_the_hooks_own_price(
+        #[case] base_is_currency0: bool,
+    ) {
+        let (base, quote) = basic_v4_test_pool_tokens(base_is_currency0);
+        let mut hooked = create_feeless_v4_test_pool(FEELESS_POOL_LIQUIDITY);
+        hooked.set_hook_handler(pricing_test_hook(Some(200)));
+
+        let core = create_feeless_v4_test_pool(FEELESS_POOL_LIQUIDITY)
+            .spot_price(&base, &quote)
+            .expect("a hookless pool always prices");
+        let price = hooked
+            .spot_price(&base, &quote)
+            .expect("the hook prices its own fee");
+
+        assert_ne!(
+            price, TEST_HOOK_SPOT_PRICE as f64,
+            "the pool asked the hook for a price instead of marking up its own"
+        );
+        let ratio = price / core;
+        assert!((ratio * 0.98 - 1.0).abs() < 1e-9, "hooked/hookless is {ratio}, not 1/0.98");
+    }
+
+    /// The companion of the test above: the very same handler, with nothing but its analytic fee
+    /// taken away, is asked for a price and its answer is passed through. That is what the pool
+    /// would return for the hook above if it consulted the handler first.
+    #[rstest]
+    #[case::base_is_currency0(true)]
+    #[case::base_is_currency1(false)]
+    fn test_spot_price_uses_the_hooks_own_price_without_an_analytic_fee(
+        #[case] base_is_currency0: bool,
+    ) {
+        let (base, quote) = basic_v4_test_pool_tokens(base_is_currency0);
+        let mut hooked = create_feeless_v4_test_pool(FEELESS_POOL_LIQUIDITY);
+        hooked.set_hook_handler(pricing_test_hook(None));
+
+        let price = hooked
+            .spot_price(&base, &quote)
+            .expect("the hook answers with a price");
+
+        assert_eq!(price, TEST_HOOK_SPOT_PRICE as f64);
     }
 
     /// A handler that does not price its fee analytically keeps the finite-difference fallback,
