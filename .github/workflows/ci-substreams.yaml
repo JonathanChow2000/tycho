@@ -119,8 +119,8 @@ jobs:
         if: steps.substreams-files-changed.outputs.any_changed != 'true'
         run: echo "No changes to substreams directory, skipping test check"
 
-  release-script:
-    name: Substreams Release Script
+  test-release:
+    name: Substreams Release Script Test
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
