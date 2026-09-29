@@ -25,9 +25,10 @@ Tracks Protocol Components **WITH** swap hooks:
 
 On Robinhood, `map_pons_enriched_block_changes` decodes a Pons V2 MemeHook pool's `hookFeeBps` and
 `creatorTaxBps` straight from the storage writes its creation transaction's `registerPool` call
-makes, rather than from an event or a stored attribute the hook exposes. Per-call storage writes
-only reach a Substreams module on extended blocks, so a provider serving this manifest needs
-`DetailLevel: EXTENDED`.
+makes, rather than from an event or a stored attribute the hook exposes. The module reads the hook
+addresses it treats as Pons from one parameter, `pons_hooks=<address>[,<address>...]`, and the
+manifest sets it to the canonical deployment. Per-call storage writes only reach a Substreams
+module on extended blocks, so a provider serving this manifest needs `DetailLevel: EXTENDED`.
 
 ## Hook Permission Detection
 

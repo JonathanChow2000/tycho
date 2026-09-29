@@ -21,14 +21,14 @@ use crate::{
     storage::{pad32, tx_storage_writes, Word},
 };
 
-/// Query-string parameters of [`map_pons_enriched_block_changes`]. `pons_hooks` is a non-empty,
-/// comma-separated list of 20-byte hexadecimal addresses, e.g.
-/// `pons_hooks=0xe5e702641ea86f4ae6cc3cdaed2b886f976be044,0x...`. The singular `pons_hook` form
-/// remains accepted for existing overrides, but cannot be combined with `pons_hooks`.
+/// Query-string parameters of [`map_pons_enriched_block_changes`]. `pons_hooks` is the only
+/// parameter: a non-empty, comma-separated list of 20-byte hexadecimal addresses, with the `0x`
+/// prefix optional and the digits read case-insensitively, e.g.
+/// `pons_hooks=0xe5e702641ea86f4ae6cc3cdaed2b886f976be044,0x...`. A single hook is a one-element
+/// list.
 #[derive(Debug, Deserialize)]
 pub struct Params {
     pub pons_hooks: Option<String>,
-    pub pons_hook: Option<String>,
 }
 
 impl Params {
@@ -42,19 +42,11 @@ impl Params {
     /// Returns the configured Pons hooks as raw addresses. Each comma-separated entry must be
     /// exactly 20 hexadecimal bytes, and duplicate addresses are rejected case-insensitively.
     pub fn pons_hook_addresses(&self) -> Result<Vec<[u8; 20]>> {
-        let value = match (&self.pons_hooks, &self.pons_hook) {
-            (Some(_), Some(_)) => {
-                return Err(anyhow!(
-                    "set exactly one of `pons_hooks` or the legacy `pons_hook`, not both"
-                ))
-            }
-            (Some(value), None) => value,
-            (None, Some(value)) => value,
-            (None, None) => {
-                return Err(anyhow!(
-                    "missing Pons hook configuration: set `pons_hooks` to one or more comma-separated addresses"
-                ))
-            }
+        let Some(value) = &self.pons_hooks else {
+            return Err(anyhow!(
+                "missing Pons hook configuration: set `pons_hooks` to one or more \
+                 comma-separated addresses"
+            ))
         };
 
         if value.is_empty() {
@@ -184,13 +176,10 @@ fn enrich_transaction(
             continue
         };
         let writes = tx_storage_writes(trace, pons_hook);
-        match pons_static_attributes(&pool_id, &writes) {
-            Some(attributes) => component.static_att.extend(attributes),
-            None => substreams::log::info!(
-                "pons: pool {} keeps no fee terms from transaction {}",
-                component.id,
-                tx_hash
-            ),
+        // `pons_static_attributes` logs the reason it rejects a registration, so a second
+        // message here would only repeat it.
+        if let Some(attributes) = pons_static_attributes(&pool_id, &writes) {
+            component.static_att.extend(attributes);
         }
     }
 }
@@ -594,7 +583,7 @@ mod tests {
     }
 
     #[test]
-    fn params_accept_multiple_hooks_and_the_legacy_singleton() {
+    fn params_accept_multiple_hooks_in_any_case_and_without_the_prefix() {
         let params = Params::parse_from_query(
             "pons_hooks=E5E702641EA86F4AE6CC3CDAED2B886F976BE044,0x0000000000000000000000000000000000000002",
         )
@@ -605,15 +594,18 @@ mod tests {
                 .expect("multiple hooks decode"),
             vec![PONS_HOOK, SECOND_PONS_HOOK]
         );
+    }
 
-        let legacy = Params::parse_from_query("pons_hook=e5e702641ea86f4ae6cc3cdaed2b886f976be044")
-            .expect("the legacy query parses");
-        assert_eq!(
-            legacy
+    /// `pons_hooks` is the only form the module reads: the singular `pons_hook` is not a
+    /// parameter, so a query that sets it alone configures no hook at all.
+    #[test]
+    fn params_reject_the_singular_pons_hook_form() {
+        let error =
+            Params::parse_from_query("pons_hook=0xe5e702641ea86f4ae6cc3cdaed2b886f976be044")
+                .expect("the query syntax is valid")
                 .pons_hook_addresses()
-                .expect("the legacy value decodes"),
-            vec![PONS_HOOK]
-        );
+                .expect_err("`pons_hook` is not a parameter of this module");
+        assert!(error.to_string().contains("pons_hooks"), "{error}");
     }
 
     #[test]
@@ -624,7 +616,6 @@ mod tests {
             "pons_hooks=0xzzz",
             "pons_hooks=0xe5e702641ea86f4ae6cc3cdaed2b886f976be0",
             "pons_hooks=0xe5e702641ea86f4ae6cc3cdaed2b886f976be044,E5E702641EA86F4AE6CC3CDAED2B886F976BE044",
-            "pons_hook=0xe5e702641ea86f4ae6cc3cdaed2b886f976be044&pons_hooks=0x0000000000000000000000000000000000000002",
         ] {
             let error = Params::parse_from_query(input)
                 .expect("the query syntax is valid")
