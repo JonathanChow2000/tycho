@@ -1,3 +1,11 @@
+## [0.430.1](https://github.com/propeller-heads/tycho/compare/0.430.0...0.430.1) (2026-09-29)
+
+
+### Bug Fixes
+
+* **tycho-test:** send execution simulations in bounded RPC batches ([bbd526a](https://github.com/propeller-heads/tycho/commit/bbd526aa653d98abd48b9d5a4a68e329e06be25f))
+* **tycho-test:** send execution simulations in bounded RPC batches ([#1515](https://github.com/propeller-heads/tycho/issues/1515)) ([4359be2](https://github.com/propeller-heads/tycho/commit/4359be20dc0b72c549277d9882b65508c1c9292a))
+
 ## [0.430.0](https://github.com/propeller-heads/tycho/compare/0.429.0...0.430.0) (2026-09-29)
 
 
