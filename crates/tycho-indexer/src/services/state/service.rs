@@ -25,19 +25,24 @@
 //! Today's handler answers every such version: from the versioned query when the database holds
 //! it, otherwise as `latest from the DB ⊕ uncommitted window changes`.
 
-// Filled in by the read path; until then nothing reads the fields.
-#![allow(dead_code)]
-
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
 
 use thiserror::Error;
-use tycho_common::dto;
+use tycho_common::{
+    dto::{self, PaginationResponse},
+    models::{contract::Account, PaginationParams},
+    storage::{BlockOrTimestamp, StorageError, WriteTimestamp},
+    Bytes,
+};
 
-use super::{cache::EntityCache, window::DeltaWindow};
-use crate::services::rpc::RpcError;
+use super::{
+    cache::{CachedAccount, EntityCache},
+    window::{DeltaWindow, WindowResolution},
+};
+use crate::services::{deltas_buffer::PendingDeltasError, rpc::RpcError};
 
 /// Which path answers state requests, holding what the cache modes need: the loaded
 /// [`EntityCache`] when building the services, the [`StateService`] once built.
@@ -124,8 +129,90 @@ impl StateService {
         &self,
         request: &dto::StateRequestBody,
     ) -> Result<dto::StateRequestResponse, StateServiceError> {
-        let _ = request;
-        todo!("serve contract_state from the cache")
+        let ids = request
+            .contract_ids
+            .as_deref()
+            .ok_or_else(|| RpcError::Parse("contract_ids are required".to_string()))?;
+        // Slice the page out of the requested ids, like the database path does.
+        let pagination = PaginationParams::from(&request.pagination);
+        let page: Vec<Bytes> = ids
+            .iter()
+            .skip(pagination.offset() as usize)
+            .take(pagination.page_size as usize)
+            .cloned()
+            .collect();
+        // Resolve the version and copy the window changes for the page under one window lock, so
+        // both see the same blocks.
+        let (version, window_changes) =
+            self.read_window(&request.protocol_system, &request.version, |window, upto| {
+                window.account_changes(&page, upto)
+            })?;
+
+        // Copy the cached entries under the cache read lock; folds wait until it is released.
+        let mut entries = Vec::with_capacity(page.len());
+        {
+            let cache = self.cache.read();
+            for address in &page {
+                let entry = cache.account(address);
+                // The cache keeps only the newest value, so an entry written after `version`
+                // cannot be rolled back to it. Resolving `version` in the window is not enough to
+                // rule this out: a fold can land between the capture and this read, and another
+                // extractor that shares the account folds blocks this window has not reached.
+                if entry.is_some_and(|entry| entry.newest_write() > version) {
+                    return Err(StateServiceError::VersionTooOld);
+                }
+                entries.push(entry.cloned());
+            }
+        }
+
+        // Apply the window changes on top of each entry, without holding any lock.
+        let mut accounts = Vec::with_capacity(page.len());
+        for (address, entry) in page.iter().zip(entries) {
+            let changes = window_changes
+                .get(address)
+                .map_or(&[][..], Vec::as_slice);
+            let (mut entry, changes) = match entry {
+                Some(entry) => (entry, changes),
+                // Not cached: build the account from its first delta in the window and apply the
+                // rest, as the database path does for an address it does not hold. An address with
+                // no delta fails the whole request, as it does on the database path.
+                // TODO: serve unknown ids the same way for accounts and components: both as an
+                // empty entity or both as an error.
+                None => {
+                    let Some((start, delta)) =
+                        changes
+                            .iter()
+                            .enumerate()
+                            .find_map(|(i, change)| {
+                                change
+                                    .delta
+                                    .as_ref()
+                                    .map(|delta| (i, delta))
+                            })
+                    else {
+                        return Err(RpcError::Storage(StorageError::NotFound(
+                            "Contract".to_string(),
+                            address.to_string(),
+                        ))
+                        .into());
+                    };
+                    let first = &changes[start];
+                    (
+                        CachedAccount::from_creation(delta, first.balances.as_ref(), first.at),
+                        &changes[start + 1..],
+                    )
+                }
+            };
+            for change in changes {
+                entry.apply_block(change.delta.as_ref(), change.balances.as_ref(), change.at);
+            }
+            accounts.push(dto::ResponseAccount::from(Account::from(entry)));
+        }
+
+        Ok(dto::StateRequestResponse::new(
+            accounts,
+            PaginationResponse::new(pagination.page, pagination.page_size, ids.len() as i64),
+        ))
     }
 
     /// Serves `/protocol_state` from the cache.
@@ -147,5 +234,312 @@ impl StateService {
     ) -> Result<dto::ProtocolStateRequestResponse, StateServiceError> {
         let _ = request;
         todo!("serve protocol_state from the cache")
+    }
+
+    /// Resolves `version` in the window of `protocol_system` and runs `read` on that window, up
+    /// to the resolved block, under one lock: a fold or revert in between could otherwise remove
+    /// the resolved block from the window. Returns the resolved block's write timestamp with what
+    /// `read` returned; the lock is released before this returns.
+    fn read_window<T>(
+        &self,
+        protocol_system: &str,
+        version: &dto::VersionParam,
+        read: impl FnOnce(&DeltaWindow, u64) -> Result<T, StorageError>,
+    ) -> Result<(WriteTimestamp, T), StateServiceError> {
+        let window = self
+            .windows
+            .get(protocol_system)
+            .ok_or_else(|| {
+                RpcError::Parse(format!("Unknown protocol system `{protocol_system}`"))
+            })?;
+        let version = BlockOrTimestamp::try_from(version).map_err(RpcError::from)?;
+        let window = window.lock().map_err(|err| {
+            RpcError::from(PendingDeltasError::LockError(
+                protocol_system.to_string(),
+                err.to_string(),
+            ))
+        })?;
+        let block = match window.resolve(&version) {
+            WindowResolution::InWindow(block) => block,
+            WindowResolution::BelowFloor => return Err(StateServiceError::VersionTooOld),
+            WindowResolution::AboveTip => {
+                return Err(RpcError::Storage(StorageError::NotFound(
+                    "Block".to_string(),
+                    format!("{version:?}"),
+                ))
+                .into())
+            }
+        };
+        let value = read(&window, block.number)
+            .map_err(|err| RpcError::from(PendingDeltasError::from(err)))?;
+        Ok((WriteTimestamp::from(&block), value))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use rstest::rstest;
+    use tycho_common::models::{
+        blockchain::BlockAggregatedChanges, contract::AccountDelta, Chain, ChangeType,
+    };
+
+    use super::*;
+    use crate::{
+        extractor::models::fixtures,
+        services::state::window::{FoldSink, WindowConfig},
+        testing,
+    };
+
+    const SYSTEM: &str = "ex";
+
+    /// A service over one window of `depth` blocks, folding into a cache that starts empty.
+    struct Harness {
+        service: StateService,
+        window: Arc<Mutex<DeltaWindow>>,
+        cache: Arc<EntityCache>,
+    }
+
+    impl Harness {
+        fn new(depth: u64) -> Self {
+            let window = Arc::new(Mutex::new(DeltaWindow::new(
+                SYSTEM.to_string(),
+                WindowConfig { depth, min_fold_batch: 1 },
+            )));
+            let cache = Arc::new(EntityCache::new());
+            let service = StateService::new(
+                HashMap::from([(SYSTEM.to_string(), window.clone())]),
+                cache.clone(),
+            );
+            Self { service, window, cache }
+        }
+
+        /// Inserts `m` and folds every block that became evictable into the cache.
+        fn push(&self, m: BlockAggregatedChanges) {
+            let mut window = self.window.lock().unwrap();
+            window.insert(&Arc::new(m)).unwrap();
+            window
+                .fold_evictable(self.cache.as_ref())
+                .unwrap();
+        }
+    }
+
+    /// Block `n`, finalized and committed.
+    fn msg(n: u64) -> BlockAggregatedChanges {
+        testing::aggregated_changes(SYSTEM, n, n, Some(n))
+    }
+
+    fn addr(n: u64) -> Bytes {
+        Bytes::from(n).lpad(20, 0)
+    }
+
+    fn word(n: u64) -> Bytes {
+        Bytes::from(n).lpad(32, 0)
+    }
+
+    fn account_delta(address: &Bytes, x: u64, change: ChangeType) -> AccountDelta {
+        let (balance, code) = match change {
+            ChangeType::Creation => (Some(Bytes::from(x)), Some(Bytes::from("0x6000"))),
+            _ => (None, None),
+        };
+        AccountDelta::new(
+            Chain::Ethereum,
+            address.clone(),
+            fixtures::optional_slots([(1, x)]),
+            balance,
+            code,
+            change,
+        )
+    }
+
+    fn with_account(mut m: BlockAggregatedChanges, delta: AccountDelta) -> BlockAggregatedChanges {
+        m.account_deltas
+            .insert(delta.address.clone(), delta);
+        m
+    }
+
+    /// Account `addr(1)` created in block 1, slot 1 set to `n` in each block `n` up to 5. With
+    /// depth 2 the cache holds blocks 1-3 and the window blocks 4-5.
+    fn accounts() -> Harness {
+        let harness = Harness::new(2);
+        harness.push(with_account(msg(1), account_delta(&addr(1), 1, ChangeType::Creation)));
+        for n in 2..=5 {
+            harness.push(with_account(msg(n), account_delta(&addr(1), n, ChangeType::Update)));
+        }
+        harness
+    }
+
+    fn contract_request(ids: Vec<Bytes>, version: dto::VersionParam) -> dto::StateRequestBody {
+        dto::StateRequestBody {
+            contract_ids: Some(ids),
+            protocol_system: SYSTEM.to_string(),
+            version,
+            chain: dto::Chain::Ethereum,
+            pagination: dto::PaginationParams::new(0, 100),
+        }
+    }
+
+    fn at_block(n: u64) -> dto::VersionParam {
+        dto::VersionParam::at_block(dto::Chain::Ethereum, n)
+    }
+
+    fn at_hash(n: u64) -> dto::VersionParam {
+        #[allow(deprecated)]
+        let block =
+            dto::BlockParam { hash: Some(testing::block(n).hash), chain: None, number: None };
+        dto::VersionParam::new(None, Some(block))
+    }
+
+    fn at_timestamp(n: u64) -> dto::VersionParam {
+        dto::VersionParam::new(Some(testing::block(n).ts), None)
+    }
+
+    fn served_addresses(response: &dto::StateRequestResponse) -> Vec<Bytes> {
+        response
+            .accounts
+            .iter()
+            .map(|account| account.address.clone())
+            .collect()
+    }
+
+    #[rstest]
+    #[case::number_in_window(at_block(4), 4)]
+    #[case::tip(at_block(5), 5)]
+    #[case::default_is_the_tip(dto::VersionParam::default(), 5)]
+    #[case::hash(at_hash(4), 4)]
+    #[case::timestamp(at_timestamp(4), 4)]
+    fn contract_state_serves_the_cached_entry_with_the_window_changes_up_to_the_version(
+        #[case] version: dto::VersionParam,
+        #[case] expected: u64,
+    ) {
+        let harness = accounts();
+
+        let response = harness
+            .service
+            .contract_state(&contract_request(vec![addr(1)], version))
+            .unwrap();
+
+        assert_eq!(response.accounts.len(), 1);
+        assert_eq!(response.accounts[0].slots[&word(1)], word(expected));
+    }
+
+    #[test]
+    fn contract_state_below_the_window_is_too_old() {
+        let harness = accounts();
+
+        let result = harness
+            .service
+            .contract_state(&contract_request(vec![addr(1)], at_block(3)));
+
+        assert!(matches!(result, Err(StateServiceError::VersionTooOld)));
+    }
+
+    #[test]
+    fn contract_state_above_the_tip_is_a_block_not_found() {
+        let harness = accounts();
+
+        let result = harness
+            .service
+            .contract_state(&contract_request(vec![addr(1)], at_block(6)));
+
+        let Err(StateServiceError::Rpc(err @ RpcError::Storage(StorageError::NotFound(..)))) =
+            result
+        else {
+            panic!("expected a not-found error, got {result:?}");
+        };
+        assert!(err
+            .to_string()
+            .contains("Could not find Block"));
+    }
+
+    #[test]
+    fn contract_state_is_too_old_when_a_cached_value_is_newer_than_the_version() {
+        let harness = accounts();
+        // Another extractor that shares the account folds a block past this window's tip.
+        harness
+            .cache
+            .fold(&with_account(
+                testing::aggregated_changes("other", 7, 7, Some(7)),
+                account_delta(&addr(1), 7, ChangeType::Update),
+            ))
+            .unwrap();
+
+        let result = harness
+            .service
+            .contract_state(&contract_request(vec![addr(1)], dto::VersionParam::default()));
+
+        assert!(matches!(result, Err(StateServiceError::VersionTooOld)));
+    }
+
+    #[test]
+    fn contract_state_builds_uncached_accounts_from_their_window_deltas() {
+        let harness = accounts();
+        harness.push(with_account(
+            with_account(msg(6), account_delta(&addr(2), 6, ChangeType::Creation)),
+            account_delta(&addr(3), 6, ChangeType::Update),
+        ));
+
+        let response = harness
+            .service
+            .contract_state(&contract_request(
+                vec![addr(1), addr(2), addr(3)],
+                dto::VersionParam::default(),
+            ))
+            .unwrap();
+
+        assert_eq!(served_addresses(&response), vec![addr(1), addr(2), addr(3)]);
+        assert_eq!(response.accounts[1].slots[&word(1)], word(6));
+        assert_eq!(response.accounts[2].slots[&word(1)], word(6));
+    }
+
+    #[test]
+    fn contract_state_fails_for_an_unknown_address() {
+        let harness = accounts();
+
+        let result = harness
+            .service
+            .contract_state(&contract_request(
+                vec![addr(1), addr(4)],
+                dto::VersionParam::default(),
+            ));
+
+        let Err(StateServiceError::Rpc(err)) = result else {
+            panic!("expected a not-found error, got {result:?}");
+        };
+        assert!(
+            matches!(&err, RpcError::Storage(StorageError::NotFound(entity, id)) if entity == "Contract" && *id == addr(4).to_string()),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn contract_state_paginates_the_requested_ids() {
+        let harness = accounts();
+        let mut request = contract_request(vec![addr(4), addr(1)], dto::VersionParam::default());
+        request.pagination = dto::PaginationParams::new(1, 1);
+
+        let response = harness
+            .service
+            .contract_state(&request)
+            .unwrap();
+
+        assert_eq!(served_addresses(&response), vec![addr(1)]);
+        assert_eq!(response.pagination, PaginationResponse::new(1, 1, 2));
+    }
+
+    #[test]
+    fn contract_state_rejects_requests_without_ids_or_with_an_unknown_system() {
+        let harness = accounts();
+        let mut without_ids = contract_request(vec![], dto::VersionParam::default());
+        without_ids.contract_ids = None;
+        let mut unknown_system = contract_request(vec![addr(1)], dto::VersionParam::default());
+        unknown_system.protocol_system = "unknown".to_string();
+
+        for request in [without_ids, unknown_system] {
+            let result = harness.service.contract_state(&request);
+            assert!(
+                matches!(result, Err(StateServiceError::Rpc(RpcError::Parse(_)))),
+                "{result:?}"
+            );
+        }
     }
 }
