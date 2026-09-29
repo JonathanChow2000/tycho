@@ -39,7 +39,7 @@
 //! [`DeltaWindow::fold_committed`], clears the window, and lets the replay refill it.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -54,7 +54,7 @@ use tycho_common::{
         protocol::{ComponentBalance, ProtocolComponentStateDelta},
         Address,
     },
-    storage::{BlockIdentifier, BlockOrTimestamp, StorageError},
+    storage::{BlockIdentifier, BlockOrTimestamp, StorageError, WriteTimestamp},
     Bytes,
 };
 
@@ -129,8 +129,8 @@ pub(crate) enum WindowResolution {
 /// One block's changes to a component, as captured from the window.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ComponentChange {
-    /// Block number the change belongs to.
-    pub block: u64,
+    /// The block the change belongs to.
+    pub at: WriteTimestamp,
     /// State delta of the block, if the block changed the component's state.
     pub delta: Option<ProtocolComponentStateDelta>,
     /// Token balances of the block, if the block changed the component's balances.
@@ -140,21 +140,12 @@ pub(crate) struct ComponentChange {
 /// One block's changes to an account, as captured from the window.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct AccountChange {
-    /// Block number the change belongs to.
-    pub block: u64,
+    /// The block the change belongs to.
+    pub at: WriteTimestamp,
     /// Account delta of the block, if the block changed the account.
     pub delta: Option<AccountDelta>,
     /// Token balances of the block, if the block changed the account's balances.
     pub balances: Option<HashMap<Address, AccountBalance>>,
-}
-
-/// Window changes for a set of keys up to a version, ascending by block within each key.
-#[derive(Debug, Default, Clone, PartialEq)]
-pub(crate) struct WindowPatch {
-    /// Changes per component id.
-    pub components: HashMap<String, Vec<ComponentChange>>,
-    /// Changes per account address.
-    pub accounts: HashMap<Bytes, Vec<AccountChange>>,
 }
 
 /// Folds slower than this are logged at `warn`.
@@ -416,33 +407,91 @@ impl DeltaWindow {
             .map(|m| m.block.clone())
     }
 
-    /// Every buffered change to `components` and `accounts` up to `upto`, ascending by block.
-    /// Keys with no change are absent. An `upto` below the floor yields the floor block alone;
+    /// Every buffered change to the components `ids` up to block `upto`, ascending by block.
+    /// Ids with no change are absent. An `upto` below the floor yields the floor block alone;
     /// resolve it first with [`DeltaWindow::resolve`] if that matters.
-    pub(crate) fn capture_patch(
+    ///
+    /// # Errors
+    ///
+    /// `StorageError::NotFound` when the window is empty.
+    pub(crate) fn component_changes(
         &self,
-        components: &[&str],
-        accounts: &[Bytes],
-        upto: Option<BlockNumberOrTimestamp>,
-    ) -> Result<WindowPatch, StorageError> {
-        let mut patch = WindowPatch::default();
-        for entry in self.blocks(None, upto)? {
-            let block = entry.block.number;
-            for id in components {
-                let delta = entry.state_deltas.get(*id).cloned();
+        ids: &[&str],
+        upto: u64,
+    ) -> Result<HashMap<String, Vec<ComponentChange>>, StorageError> {
+        // The requested ids as a set. Each block is scanned by its own changed keys, which are
+        // usually far fewer than a full page of ids, and each key is checked against this set.
+        let requested: HashSet<&str> = ids.iter().copied().collect();
+
+        let mut changes: HashMap<String, Vec<ComponentChange>> = HashMap::new();
+        // Reused across blocks: the requested ids the current block touches. An id present in
+        // several of the block's maps is collected once, so the block yields one change per id.
+        let mut touched: HashSet<&str> = HashSet::new();
+        for entry in self.blocks(None, Some(BlockNumberOrTimestamp::Number(upto)))? {
+            // Collect the requested ids this block changed the state or balances of.
+            touched.clear();
+            touched.extend(
+                entry
+                    .state_deltas
+                    .keys()
+                    .chain(entry.component_balances.keys())
+                    .map(String::as_str)
+                    .filter(|id| requested.contains(id)),
+            );
+
+            // Record one change per touched id, stamped with the block.
+            let at = WriteTimestamp::from(&entry.block);
+            for &id in &touched {
+                let delta = entry.state_deltas.get(id).cloned();
                 let balances = entry
                     .component_balances
-                    .get(*id)
+                    .get(id)
                     .cloned();
-                if delta.is_some() || balances.is_some() {
-                    patch
-                        .components
-                        .entry(id.to_string())
-                        .or_default()
-                        .push(ComponentChange { block, delta, balances });
-                }
+                changes
+                    .entry(id.to_string())
+                    .or_default()
+                    .push(ComponentChange { at, delta, balances });
             }
-            for address in accounts {
+        }
+        Ok(changes)
+    }
+
+    /// Every buffered change to the accounts `addresses` up to block `upto`, ascending by block.
+    /// Addresses with no change are absent. An `upto` below the floor yields the floor block
+    /// alone; resolve it first with [`DeltaWindow::resolve`] if that matters.
+    ///
+    /// # Errors
+    ///
+    /// `StorageError::NotFound` when the window is empty.
+    pub(crate) fn account_changes(
+        &self,
+        addresses: &[Bytes],
+        upto: u64,
+    ) -> Result<HashMap<Bytes, Vec<AccountChange>>, StorageError> {
+        // The requested addresses as a set. Each block is scanned by its own changed keys, which
+        // are usually far fewer than a full page of addresses, and each key is checked against
+        // this set.
+        let requested: HashSet<&Bytes> = addresses.iter().collect();
+
+        let mut changes: HashMap<Bytes, Vec<AccountChange>> = HashMap::new();
+        // Reused across blocks: the requested addresses the current block touches. An address
+        // present in both of the block's maps is collected once, so the block yields one change
+        // per address.
+        let mut touched: HashSet<&Bytes> = HashSet::new();
+        for entry in self.blocks(None, Some(BlockNumberOrTimestamp::Number(upto)))? {
+            // Collect the requested addresses this block changed the state or token balances of.
+            touched.clear();
+            touched.extend(
+                entry
+                    .account_deltas
+                    .keys()
+                    .chain(entry.account_balances.keys())
+                    .filter(|address| requested.contains(address)),
+            );
+
+            // Record one change per touched address, stamped with the block.
+            let at = WriteTimestamp::from(&entry.block);
+            for &address in &touched {
                 let delta = entry
                     .account_deltas
                     .get(address)
@@ -451,16 +500,13 @@ impl DeltaWindow {
                     .account_balances
                     .get(address)
                     .cloned();
-                if delta.is_some() || balances.is_some() {
-                    patch
-                        .accounts
-                        .entry(address.clone())
-                        .or_default()
-                        .push(AccountChange { block, delta, balances });
-                }
+                changes
+                    .entry(address.clone())
+                    .or_default()
+                    .push(AccountChange { at, delta, balances });
             }
         }
-        Ok(patch)
+        Ok(changes)
     }
 
     /// Resolves a requested version to a servable window block, from memory only.
@@ -659,7 +705,7 @@ mod test {
     }
 
     #[test]
-    fn capture_patch_returns_exactly_the_changes_up_to_the_version_in_order() {
+    fn changes_are_exactly_those_up_to_the_version_in_order() {
         let address = Bytes::from_str("0x6F4Feb566b0f29e2edC231aDF88Fe7e1169D7c05").unwrap();
         let mut w = window(128, 1);
         for n in 1..=6u64 {
@@ -673,26 +719,25 @@ mod test {
             put(&mut w, m).unwrap();
         }
 
-        let patch = w
-            .capture_patch(
-                &["c1", "absent"],
-                std::slice::from_ref(&address),
-                Some(BlockNumberOrTimestamp::Number(5)),
-            )
+        let components = w
+            .component_changes(&["c1", "absent"], 5)
+            .unwrap();
+        let accounts = w
+            .account_changes(std::slice::from_ref(&address), 5)
             .unwrap();
 
-        let component_blocks: Vec<u64> = patch.components["c1"]
+        let component_blocks: Vec<u64> = components["c1"]
             .iter()
-            .map(|c| c.block)
+            .map(|c| c.at.block_number())
             .collect();
         assert_eq!(component_blocks, vec![2, 4]);
-        assert!(!patch.components.contains_key("absent"));
-        let account_blocks: Vec<u64> = patch.accounts[&address]
+        assert!(!components.contains_key("absent"));
+        let account_blocks: Vec<u64> = accounts[&address]
             .iter()
-            .map(|c| c.block)
+            .map(|c| c.at.block_number())
             .collect();
         assert_eq!(account_blocks, vec![3, 5]);
-        assert!(patch.components["c1"]
+        assert!(components["c1"]
             .iter()
             .all(|c| c.delta.is_some() && c.balances.is_none()));
     }
@@ -708,12 +753,12 @@ mod test {
                 .unwrap();
         }
 
-        let patch = w
-            .capture_patch(&["c1"], &[], None)
+        let changes = w
+            .component_changes(&["c1"], 42)
             .unwrap();
-        let blocks = patch.components["c1"]
+        let blocks = changes["c1"]
             .iter()
-            .map(|change| change.block)
+            .map(|change| change.at.block_number())
             .collect::<Vec<_>>();
         let latest = w.tip().unwrap();
 
@@ -731,50 +776,89 @@ mod test {
     }
 
     #[test]
-    fn capture_patch_captures_balance_only_changes() {
+    fn changes_include_balance_only_changes() {
         let address = Bytes::from_str("0x6F4Feb566b0f29e2edC231aDF88Fe7e1169D7c05").unwrap();
         let mut w = window(128, 1);
         put(&mut w, with_component_balance(msg(1, 0, None), "c1")).unwrap();
         put(&mut w, with_account_balance(msg(2, 0, None), &address)).unwrap();
 
-        let patch = w
-            .capture_patch(&["c1"], std::slice::from_ref(&address), None)
+        let components = w.component_changes(&["c1"], 2).unwrap();
+        let accounts = w
+            .account_changes(std::slice::from_ref(&address), 2)
             .unwrap();
 
         assert_eq!(
-            patch.components["c1"],
-            vec![ComponentChange { block: 1, delta: None, balances: Some(HashMap::new()) }]
+            components["c1"],
+            vec![ComponentChange {
+                at: WriteTimestamp::from(&testing::block(1)),
+                delta: None,
+                balances: Some(HashMap::new())
+            }]
         );
         assert_eq!(
-            patch.accounts[&address],
-            vec![AccountChange { block: 2, delta: None, balances: Some(HashMap::new()) }]
+            accounts[&address],
+            vec![AccountChange {
+                at: WriteTimestamp::from(&testing::block(2)),
+                delta: None,
+                balances: Some(HashMap::new())
+            }]
         );
     }
 
     #[test]
-    fn capture_patch_below_the_floor_yields_the_floor_block_alone() {
+    fn changes_hold_one_change_per_key_and_block() {
+        let address = Bytes::from_str("0x6F4Feb566b0f29e2edC231aDF88Fe7e1169D7c05").unwrap();
+        let m = with_account_balance(
+            with_account_delta(
+                testing::with_state_delta(with_component_balance(msg(1, 0, None), "c1"), "c1", 1),
+                &address,
+                1,
+            ),
+            &address,
+        );
+        let mut w = window(128, 1);
+        put(&mut w, m).unwrap();
+
+        let components = w.component_changes(&["c1"], 1).unwrap();
+        let accounts = w
+            .account_changes(std::slice::from_ref(&address), 1)
+            .unwrap();
+
+        let [component] = components["c1"].as_slice() else {
+            panic!("expected one component change, got {:?}", components["c1"]);
+        };
+        assert!(component.delta.is_some() && component.balances.is_some());
+        let [account] = accounts[&address].as_slice() else {
+            panic!("expected one account change, got {:?}", accounts[&address]);
+        };
+        assert!(account.delta.is_some() && account.balances.is_some());
+    }
+
+    #[test]
+    fn changes_below_the_floor_are_the_floor_block_alone() {
         let mut w = window(128, 1);
         for n in 5..=7u64 {
             put(&mut w, testing::with_state_delta(msg(n, 0, None), "c1", n)).unwrap();
         }
 
-        let patch = w
-            .capture_patch(&["c1"], &[], Some(BlockNumberOrTimestamp::Number(2)))
-            .unwrap();
+        let changes = w.component_changes(&["c1"], 2).unwrap();
 
-        let blocks: Vec<u64> = patch.components["c1"]
+        let blocks: Vec<u64> = changes["c1"]
             .iter()
-            .map(|c| c.block)
+            .map(|c| c.at.block_number())
             .collect();
         assert_eq!(blocks, vec![5]);
     }
 
     #[test]
-    fn capture_patch_on_an_empty_window_is_empty() {
-        let patch = window(128, 1)
-            .capture_patch(&["c1"], &[], None)
-            .unwrap();
-        assert!(patch.components.is_empty() && patch.accounts.is_empty());
+    fn changes_on_an_empty_window_are_not_found() {
+        let w = window(128, 1);
+
+        assert!(matches!(w.component_changes(&["c1"], 1), Err(StorageError::NotFound(..))));
+        assert!(matches!(
+            w.account_changes(&[Bytes::default()], 1),
+            Err(StorageError::NotFound(..))
+        ));
     }
 
     #[test]
