@@ -1,3 +1,32 @@
+## [0.431.0](https://github.com/propeller-heads/tycho/compare/0.430.2...0.431.0) (2026-09-30)
+
+
+### Features
+
+* add native Pons V2 Uniswap V4 hook support on Robinhood ([#1489](https://github.com/propeller-heads/tycho/issues/1489)) ([106ac27](https://github.com/propeller-heads/tycho/commit/106ac27dc671f94447bcee14419164dfcb41ecbb))
+* **execution:** encode uniswap_v4_hooks swaps with the V4 encoder ([ebd569b](https://github.com/propeller-heads/tycho/commit/ebd569b3e6b53c2b981e91d21f3c21ea020e92bd))
+* **simulation:** add native Pons V2 MemeHook handler for Robinhood ([5f258bb](https://github.com/propeller-heads/tycho/commit/5f258bbf439580d453a6c91cabfab96fc0ac280c))
+* **simulation:** key Uniswap V4 hook handlers by chain and fail closed ([c38e950](https://github.com/propeller-heads/tycho/commit/c38e950fccad6c0fa9d9011f3fd2466fbdeff0b8))
+* **simulation:** treat hooks without swap permissions as no hook ([ee7156c](https://github.com/propeller-heads/tycho/commit/ee7156c6f90cfe7837a22331f217c8034d150adf))
+* **substreams:** accept multiple Pons hooks ([1fcf3f7](https://github.com/propeller-heads/tycho/commit/1fcf3f73caed5f284ce71e8a581a27f85fd6b3d2))
+* **substreams:** add Robinhood V4 with-hooks manifest (Pons V2) ([a99f763](https://github.com/propeller-heads/tycho/commit/a99f763a4b9e84fa00658498cc5ed6cd37694cda))
+
+
+### Bug Fixes
+
+* **protocol-testing:** keep the clone-path test free of RPC_URL ([882cbed](https://github.com/propeller-heads/tycho/commit/882cbedc024ceda1336555817630a5c9af8653f1))
+* **protocol-testing:** size execution trades within V4's int128 range ([e55798c](https://github.com/propeller-heads/tycho/commit/e55798c8fb42fc2e1ba8d981d5fbd99ab8b37cbb))
+* **substreams:** resolve nested packages in release.sh on both paths ([0bd090c](https://github.com/propeller-heads/tycho/commit/0bd090c212cfe16f40e4dbcf18844592694f9622))
+* **substreams:** use a single pons_hooks parameter and drop a stale log ([e0b5499](https://github.com/propeller-heads/tycho/commit/e0b5499cb4f84dc056dc7a21307d2ba9cabd1943))
+
+## [0.430.2](https://github.com/propeller-heads/tycho/compare/0.430.1...0.430.2) (2026-09-30)
+
+
+### Bug Fixes
+
+* **rfq:** parse Hashflow's error object on a rejected quote ([ac7669b](https://github.com/propeller-heads/tycho/commit/ac7669b45aa80552d32baefdaa089b77c599a166))
+* **rfq:** parse Hashflow's error object on a rejected quote ([#1517](https://github.com/propeller-heads/tycho/issues/1517)) ([d804dd7](https://github.com/propeller-heads/tycho/commit/d804dd74edca688230ee3ef3118c9f6ba3675109))
+
 ## [0.430.1](https://github.com/propeller-heads/tycho/compare/0.430.0...0.430.1) (2026-09-29)
 
 
