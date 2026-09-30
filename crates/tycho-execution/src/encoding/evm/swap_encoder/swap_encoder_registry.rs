@@ -375,6 +375,11 @@ mod tests {
                 .executor_address(),
             &expected
         );
+        // The fallback runs one way only, which is why the integration-test harness registers
+        // its executor under both names: swaps are grouped under `uniswap_v4` before the lookup.
+        assert!(registry
+            .get_encoder("uniswap_v4")
+            .is_none());
     }
 
     #[test]
