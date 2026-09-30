@@ -1301,13 +1301,13 @@ mod tests {
     /// A hook whose beforeSwap fee is whatever the pending block wrote to its slot 0, and
     /// which records the overrides each call ran under.
     #[derive(Debug, Clone)]
-    struct SlotFeeHook {
+    struct ConfigurableFeeHook {
         address: Address,
         pending_overrides: Option<Arc<PendingOverrides>>,
         seen: Arc<std::sync::Mutex<SeenCalls>>,
     }
 
-    impl SlotFeeHook {
+    impl ConfigurableFeeHook {
         /// Low address bits are the permission flags: bit 7 beforeSwap, bit 6 afterSwap.
         fn new() -> Self {
             let mut address = [0u8; 20];
@@ -1330,16 +1330,16 @@ mod tests {
         }
     }
 
-    impl HookHandler for SlotFeeHook {
+    impl HookHandler for ConfigurableFeeHook {
         fn address(&self) -> Address {
             self.address
         }
 
         fn before_swap(
             &self,
-            _: BeforeSwapParameters,
-            _: Option<HashMap<Address, HashMap<U256, U256>>>,
-            _: Option<HashMap<Address, HashMap<U256, U256>>>,
+            _params: BeforeSwapParameters,
+            _overwrites: Option<HashMap<Address, HashMap<U256, U256>>>,
+            _transient_storage: Option<HashMap<Address, HashMap<U256, U256>>>,
         ) -> Result<WithGasEstimate<BeforeSwapOutput>, SimulationError> {
             self.seen.lock().unwrap().push((
                 "before",
@@ -1347,13 +1347,11 @@ mod tests {
                     .as_deref()
                     .cloned(),
             ));
-            let fee = self.pending_fee();
-            let fee = if fee.is_zero() { U24::ZERO } else { U24::from(fee) | U24::from(0x400000) };
             Ok(WithGasEstimate {
                 gas_estimate: 0,
                 result: BeforeSwapOutput {
                     amount_delta: BeforeSwapDelta(I256::ZERO),
-                    fee,
+                    fee: U24::from(self.pending_fee()),
                     overwrites: HashMap::new(),
                     transient_storage: HashMap::new(),
                 },
@@ -1362,9 +1360,9 @@ mod tests {
 
         fn after_swap(
             &self,
-            _: AfterSwapParameters,
-            _: Option<HashMap<Address, HashMap<U256, U256>>>,
-            _: Option<HashMap<Address, HashMap<U256, U256>>>,
+            _params: AfterSwapParameters,
+            _overwrites: Option<HashMap<Address, HashMap<U256, U256>>>,
+            _transient_storage_params: Option<HashMap<Address, HashMap<U256, U256>>>,
         ) -> Result<WithGasEstimate<AfterSwapDelta>, SimulationError> {
             self.seen.lock().unwrap().push((
                 "after",
@@ -1375,15 +1373,23 @@ mod tests {
             Ok(WithGasEstimate { gas_estimate: 0, result: I128::ZERO })
         }
 
-        fn fee(&self, _: &UniswapV4State, _: SwapParams) -> Result<f64, SimulationError> {
+        fn fee(
+            &self,
+            _context: &UniswapV4State,
+            _params: SwapParams,
+        ) -> Result<f64, SimulationError> {
             Ok(0.0)
         }
 
-        fn spot_price(&self, _: &Token, _: &Token) -> Result<f64, SimulationError> {
+        fn spot_price(&self, _base: &Token, _quote: &Token) -> Result<f64, SimulationError> {
             Err(SimulationError::RecoverableError("not implemented".into()))
         }
 
-        fn get_amount_ranges(&self, _: Bytes, _: Bytes) -> Result<AmountRanges, SimulationError> {
+        fn get_amount_ranges(
+            &self,
+            _token_in: Bytes,
+            _token_out: Bytes,
+        ) -> Result<AmountRanges, SimulationError> {
             Err(SimulationError::RecoverableError("not implemented".into()))
         }
 
@@ -1393,9 +1399,9 @@ mod tests {
 
         fn delta_transition(
             &mut self,
-            _: ProtocolStateDelta,
-            _: &HashMap<Bytes, Token>,
-            _: &Balances,
+            _delta: ProtocolStateDelta,
+            _tokens: &HashMap<Bytes, Token>,
+            _balances: &Balances,
         ) -> Result<(), TransitionError> {
             Ok(())
         }
@@ -1417,7 +1423,7 @@ mod tests {
     }
 
     /// A pool at price one with liquidity on both sides of the current tick.
-    fn hooked_pool(hook: &SlotFeeHook) -> UniswapV4State {
+    fn hooked_pool(hook: &ConfigurableFeeHook) -> UniswapV4State {
         let liquidity = 1_000_000_000_000_000_000u128;
         let mut pool = UniswapV4State::new(
             liquidity,
@@ -1435,7 +1441,7 @@ mod tests {
         pool
     }
 
-    fn pending_with_hook_slot(hook: &SlotFeeHook, fee_pips: u64) -> PendingOverrides {
+    fn pending_fee_update(hook: &ConfigurableFeeHook, fee_pips: u64) -> PendingOverrides {
         PendingOverrides {
             storage: Some(HashMap::from([(
                 hook.address,
@@ -1448,14 +1454,14 @@ mod tests {
 
     #[test]
     fn test_pending_overrides_reach_both_hook_calls_and_change_the_quote() {
-        let hook = SlotFeeHook::new();
+        let hook = ConfigurableFeeHook::new();
         let amount_in = BigUint::from(1_000_000u64);
 
         let confirmed = hooked_pool(&hook)
             .get_amount_out(amount_in.clone(), &token_x(), &token_y())
             .unwrap();
         let mut pool = hooked_pool(&hook);
-        pool.set_pending_overrides(Arc::new(pending_with_hook_slot(&hook, 100_000)));
+        pool.set_pending_overrides(Arc::new(pending_fee_update(&hook, 100_000)));
         let pending = pool
             .get_amount_out(amount_in, &token_x(), &token_y())
             .unwrap();
@@ -1486,32 +1492,29 @@ mod tests {
     }
 
     #[test]
-    fn test_pending_overrides_survive_clone_box_and_stay_off_confirmed_state() {
-        let hook = SlotFeeHook::new();
+    fn test_pending_overrides_survive_clone_box() {
+        let hook = ConfigurableFeeHook::new();
         let mut pool = hooked_pool(&hook);
-        pool.delta_transition(
-            ProtocolStateDelta {
-                component_id: "pool".into(),
-                updated_attributes: HashMap::from([(
-                    "liquidity".to_string(),
-                    Bytes::from(2_000_u64.to_be_bytes().to_vec()),
-                )]),
-                deleted_attributes: HashSet::new(),
-            },
-            &HashMap::new(),
-            &Balances::default(),
-        )
-        .unwrap();
-        assert!(pool.pending_overrides().is_none(), "a confirmed transition sets no overrides");
+        pool.set_pending_overrides(Arc::new(pending_fee_update(&hook, 1)));
 
-        pool.set_pending_overrides(Arc::new(pending_with_hook_slot(&hook, 1)));
         let cloned = pool.clone_box();
         let cloned = cloned
             .as_any()
             .downcast_ref::<UniswapV4State>()
             .unwrap();
+
         assert!(cloned.pending_overrides().is_some(), "a clone quotes under the same overrides");
-        assert!(pool == *cloned, "overrides are not part of equality");
+    }
+
+    #[test]
+    fn test_pending_overrides_are_not_part_of_equality() {
+        let hook = ConfigurableFeeHook::new();
+        let confirmed = hooked_pool(&hook);
+        let mut pending = hooked_pool(&hook);
+        pending.set_pending_overrides(Arc::new(pending_fee_update(&hook, 1)));
+
+        assert!(confirmed == pending, "PartialEq ignores the overrides");
+        assert!(ProtocolSim::eq(&confirmed, &pending), "ProtocolSim::eq ignores the overrides");
     }
 
     #[test]

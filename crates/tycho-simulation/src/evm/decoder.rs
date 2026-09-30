@@ -1117,55 +1117,14 @@ where
                 }
             }
 
-            // A hooked pool prices from its hook's storage, which only the pending block's
-            // account deltas carry. A pool whose linked contract was written is cloned even
-            // without a delta of its own, as `decode` does on the confirmed stream.
-            // An override for an account a hook never reads is inert.
-            if deltas.account_deltas.is_empty() {
-                continue;
-            }
-            let mut overlaid: HashSet<String> = deltas
-                .state_deltas
-                .keys()
-                .cloned()
-                .collect();
-            for account in deltas.account_deltas.keys() {
-                if let Some(pools) = state_guard.contracts_map.get(account) {
-                    overlaid.extend(pools.iter().cloned());
-                }
-            }
-            for id in &overlaid {
-                if updated_states.contains_key(id) {
-                    continue;
-                }
-                let empty = Self::add_block_info_to_delta(
-                    ProtocolStateDelta { component_id: id.clone(), ..Default::default() },
-                    current_block.clone(),
+            if !deltas.account_deltas.is_empty() {
+                Self::apply_pending_overrides(
+                    deltas,
+                    &current_block,
+                    &mut updated_states,
+                    &state_guard,
+                    &all_balances,
                 );
-                if let Err(e) =
-                    Self::apply_update(id, empty, &mut updated_states, &state_guard, &all_balances)
-                {
-                    warn!(pool = id, error = %e, "EphemeralDeltaTransitionError");
-                }
-            }
-            let block = current_block
-                .as_ref()
-                .map(|h| BlockEnvOverrides {
-                    number: Some(h.number),
-                    timestamp: Some(h.timestamp),
-                });
-            let overrides =
-                Arc::new(PendingOverrides::from_account_deltas(&deltas.account_deltas, block));
-            for id in &overlaid {
-                if let Some(state) = updated_states
-                    .get_mut(id)
-                    .and_then(|s| {
-                        s.as_any_mut()
-                            .downcast_mut::<UniswapV4State>()
-                    })
-                {
-                    state.set_pending_overrides(Arc::clone(&overrides));
-                }
             }
         }
 
@@ -1181,6 +1140,63 @@ where
         }
 
         Ok(Update::new(block_number_or_timestamp, updated_states, HashMap::new()))
+    }
+
+    /// Sets the pending block's account deltas as overrides on every Uniswap V4 pool the block
+    /// touches: pools with a state delta and pools linked to a written contract.
+    ///
+    /// A hooked pool prices from its hook's storage, which only the account deltas carry. An
+    /// override for an account a hook never reads is inert.
+    fn apply_pending_overrides(
+        deltas: &BlockAggregatedChanges,
+        current_block: &Option<BlockHeader>,
+        updated_states: &mut HashMap<String, Box<dyn ProtocolSim>>,
+        state_guard: &RwLockReadGuard<'_, DecoderState>,
+        all_balances: &Balances,
+    ) {
+        let mut pools_under_pending_overrides: HashSet<String> = deltas
+            .state_deltas
+            .keys()
+            .cloned()
+            .collect();
+        for account in deltas.account_deltas.keys() {
+            if let Some(pools) = state_guard.contracts_map.get(account) {
+                pools_under_pending_overrides.extend(pools.iter().cloned());
+            }
+        }
+
+        // Pools with a state delta are already copies in `updated_states`.
+        for id in &pools_under_pending_overrides {
+            if updated_states.contains_key(id) {
+                continue;
+            }
+            let empty_delta = Self::add_block_info_to_delta(
+                ProtocolStateDelta { component_id: id.clone(), ..Default::default() },
+                current_block.clone(),
+            );
+            if let Err(e) =
+                Self::apply_update(id, empty_delta, updated_states, state_guard, all_balances)
+            {
+                warn!(pool = id, error = %e, "EphemeralDeltaTransitionError");
+            }
+        }
+
+        let block = current_block
+            .as_ref()
+            .map(|h| BlockEnvOverrides { number: Some(h.number), timestamp: Some(h.timestamp) });
+        let overrides =
+            Arc::new(PendingOverrides::from_account_deltas(&deltas.account_deltas, block));
+        for id in &pools_under_pending_overrides {
+            if let Some(state) = updated_states
+                .get_mut(id)
+                .and_then(|s| {
+                    s.as_any_mut()
+                        .downcast_mut::<UniswapV4State>()
+                })
+            {
+                state.set_pending_overrides(Arc::clone(&overrides));
+            }
+        }
     }
 
     /// Add current block information (number and timestamp) to a ProtocolStateDelta.
