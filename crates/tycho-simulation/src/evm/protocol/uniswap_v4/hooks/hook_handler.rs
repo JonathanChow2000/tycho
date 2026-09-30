@@ -67,6 +67,10 @@ pub trait HookHandler: Debug + Send + Sync + 'static {
     ///
     /// `None` means the hook does not model its fee as a pure function of that amount, and the
     /// caller has to simulate a swap to learn what it charges. The default returns `None`.
+    ///
+    /// Every `spot_price` of a hooked pool calls this method first, so an `Err` here stops the
+    /// pool from pricing at all. Return `Ok(None)` for "this hook cannot answer analytically";
+    /// reserve `Err` for a genuine failure.
     fn unspecified_fee_amount(
         &self,
         _unspecified: U256,

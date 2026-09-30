@@ -435,13 +435,13 @@ impl UniswapV4State {
     /// The pool's own spot buy price for `base` in units of `quote`: the amount of `quote` one
     /// `base` costs at the current price, marked up by the pool's swap fee and ignoring any hook.
     fn core_spot_price(&self, base: &Token, quote: &Token) -> Result<f64, SimulationError> {
-        let zero_for_one = base < quote;
+        let base_is_currency0 = base < quote;
         let fee_pips = self
             .fees
-            .calculate_swap_fees_pips(zero_for_one, None);
+            .calculate_swap_fees_pips(base_is_currency0, None);
         let fee = fee_pips as f64 / 1_000_000.0;
 
-        let price = if zero_for_one {
+        let price = if base_is_currency0 {
             sqrt_price_q96_to_f64(self.sqrt_price, base.decimals, quote.decimals)?
         } else {
             1.0f64 / sqrt_price_q96_to_f64(self.sqrt_price, quote.decimals, base.decimals)?
