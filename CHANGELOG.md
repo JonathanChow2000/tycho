@@ -1,3 +1,11 @@
+## [0.430.2](https://github.com/propeller-heads/tycho/compare/0.430.1...0.430.2) (2026-09-30)
+
+
+### Bug Fixes
+
+* **rfq:** parse Hashflow's error object on a rejected quote ([ac7669b](https://github.com/propeller-heads/tycho/commit/ac7669b45aa80552d32baefdaa089b77c599a166))
+* **rfq:** parse Hashflow's error object on a rejected quote ([#1517](https://github.com/propeller-heads/tycho/issues/1517)) ([d804dd7](https://github.com/propeller-heads/tycho/commit/d804dd74edca688230ee3ef3118c9f6ba3675109))
+
 ## [0.430.1](https://github.com/propeller-heads/tycho/compare/0.430.0...0.430.1) (2026-09-29)
 
 
