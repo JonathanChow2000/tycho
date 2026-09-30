@@ -116,6 +116,24 @@ fn check_execution_slippage(
     }
 }
 
+/// The largest input amount a swap can actually be executed with, given `limit`.
+///
+/// Uniswap V4 settles a swap through a `BalanceDelta` of two `int128`s, and the executor's
+/// `swapExactInputSingle` takes the amount as a `uint128` that v4-core casts to `int128`, so no
+/// amount above `int128::MAX` can be executed however deep the pool is. A limit above that
+/// ceiling is not executable, and the percentages the harness trades at must stay distinct sizes,
+/// so the cap belongs on the limit itself rather than on each amount derived from it.
+///
+/// Returns `limit` unchanged when it is at or below the ceiling.
+fn executable_max_input(limit: &BigUint) -> BigUint {
+    let ceiling = BigUint::from(i128::MAX as u128);
+    if *limit > ceiling {
+        ceiling
+    } else {
+        limit.clone()
+    }
+}
+
 pub enum TestType {
     Full(TestTypeFull),
     Range(TestTypeRange),
@@ -1198,6 +1216,16 @@ impl TestRunner {
                     id, token_in.symbol, token_out.symbol
                 );
 
+                let executable_input = executable_max_input(&max_input);
+                if executable_input != max_input {
+                    warn!(
+                        "[{}] Limit of {max_input} {} exceeds what a swap can be executed with; \
+                         sizing trades from {executable_input} instead",
+                        id, token_in.symbol
+                    );
+                }
+                let max_input = executable_input;
+
                 // A zero limit means the venue does not quote this direction at all - a
                 // one-directional component such as ETH -> stETH staking, or a redemption
                 // rate limit with no capacity at this block. Skip the direction instead of
@@ -1555,6 +1583,20 @@ mod tests {
     use tycho_simulation::tycho_common::{models::protocol::ProtocolComponentState, Bytes};
 
     use super::*;
+
+    /// A limit no swap could be executed with is capped; anything at or below the ceiling is the
+    /// size the venue reported, untouched.
+    #[test]
+    fn execution_trades_are_sized_within_uniswap_v4s_int128_range() {
+        let ceiling = BigUint::from(i128::MAX as u128);
+
+        assert_eq!(executable_max_input(&BigUint::from(1_000u32)), BigUint::from(1_000u32));
+        assert_eq!(executable_max_input(&ceiling), ceiling);
+        assert_eq!(executable_max_input(&(&ceiling + 1u32)), ceiling);
+        // The limit the deep Pons pool reports, some 12 orders of magnitude past the ceiling.
+        let pons_limit = BigUint::from_str("1693513416259416009682992155640660564186233").unwrap();
+        assert_eq!(executable_max_input(&pons_limit), ceiling);
+    }
 
     #[test]
     fn execution_within_slippage_tolerance_matches() {
