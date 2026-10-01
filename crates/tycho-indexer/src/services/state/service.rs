@@ -218,7 +218,7 @@ impl StateService {
                 // cannot be rolled back to it. Resolving `version` in the window is not enough to
                 // rule this out: a fold can land between the capture and this read, and another
                 // extractor that shares the account folds blocks this window has not reached.
-                if entry.is_some_and(|entry| entry.newest_write() > version) {
+                if entry.is_some_and(|entry| entry.updated_at() > version) {
                     return Err(StateServiceError::Fallback(FallbackReason::EntryNewer));
                 }
                 entries.push(entry.cloned());

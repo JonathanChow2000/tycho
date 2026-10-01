@@ -153,8 +153,9 @@ pub(crate) struct CachedAccount {
     native_balance: Timestamped<Balance>,
     token_balances: HashMap<Address, Timestamped<AccountBalance>>,
     code: Timestamped<CachedCode>,
-    /// The newest timestamp among the values above, kept up to date by every write.
-    newest_write: WriteTimestamp,
+    /// The newest timestamp among the values above. A write that [`Timestamped::write`] skips
+    /// does not move it.
+    updated_at: WriteTimestamp,
     /// Transaction references come from the startup load only — folds don't carry them.
     balance_modify_tx: TxHash,
     code_modify_tx: TxHash,
@@ -165,7 +166,7 @@ impl CachedAccount {
     /// Builds an entry from the startup snapshot. Every slot and token balance of `account` must
     /// have a timestamp in `timestamps`; a missing one is a snapshot bug and panics.
     pub(crate) fn from_snapshot(account: Account, timestamps: AccountWriteTimestamps) -> Self {
-        let newest_write = timestamps
+        let updated_at = timestamps
             .slots
             .values()
             .chain(timestamps.token_balances.values())
@@ -211,7 +212,7 @@ impl CachedAccount {
                 CachedCode { code: account.code, hash: account.code_hash },
                 timestamps.code,
             ),
-            newest_write,
+            updated_at,
             balance_modify_tx: account.balance_modify_tx,
             code_modify_tx: account.code_modify_tx,
             creation_tx: account.creation_tx,
@@ -277,7 +278,7 @@ impl CachedAccount {
             count(write_timestamped(&mut self.token_balances, token.clone(), balance.clone(), at));
         }
         if applied {
-            self.newest_write = self.newest_write.max(at);
+            self.updated_at = self.updated_at.max(at);
         }
         if conflicts > 0 {
             warn!(
@@ -289,9 +290,9 @@ impl CachedAccount {
         }
     }
 
-    /// Timestamp of the newest write to any value of the account.
-    pub(crate) fn newest_write(&self) -> WriteTimestamp {
-        self.newest_write
+    /// Timestamp of the newest write applied to any value of the account.
+    pub(crate) fn updated_at(&self) -> WriteTimestamp {
+        self.updated_at
     }
 
     #[cfg(test)]
@@ -430,7 +431,7 @@ impl CachedComponentState {
         );
     }
 
-    /// Tag of the newest write applied to this entry.
+    /// Timestamp of the newest write applied to this entry.
     pub(crate) fn updated_at(&self) -> WriteTimestamp {
         self.updated_at
     }
@@ -1037,7 +1038,7 @@ mod test {
     }
 
     #[test]
-    fn account_newest_write_moves_only_with_an_applied_write() {
+    fn account_updated_at_moves_only_with_an_applied_write() {
         let address = addr(1);
         let mut cached = CachedAccount::from_snapshot(
             account(&address),
@@ -1049,14 +1050,14 @@ mod test {
             None,
             at(4),
         );
-        assert_eq!(cached.newest_write(), at(5));
+        assert_eq!(cached.updated_at(), at(5));
 
         cached.apply_block(
             Some(&update(&address, fixtures::optional_slots([(1, 9)]))),
             None,
             at(7),
         );
-        assert_eq!(cached.newest_write(), at(7));
+        assert_eq!(cached.updated_at(), at(7));
     }
 
     #[test]
