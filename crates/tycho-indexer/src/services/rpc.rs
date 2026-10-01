@@ -1883,11 +1883,6 @@ mod tests {
     /// contract; the cache serves explicit ids only.
     #[tokio::test]
     async fn test_get_contract_state_without_ids_uses_the_database_in_serve_mode() {
-        use crate::services::state::{
-            cache::EntityCache,
-            window::{new_windows, WindowConfig},
-        };
-
         let account = Account::new(
             Chain::Ethereum,
             Bytes::from(1u64).lpad(20, 0),
