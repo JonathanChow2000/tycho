@@ -36,14 +36,17 @@ use thiserror::Error;
 use tracing::debug;
 use tycho_common::{
     dto::{self, PaginationResponse},
-    models::{contract::Account, protocol::ProtocolComponentState, MergeError, PaginationParams},
+    models::{
+        blockchain::BlockAggregatedChanges, contract::Account, protocol::ProtocolComponentState,
+        MergeError, PaginationParams,
+    },
     storage::{BlockOrTimestamp, StorageError, WriteTimestamp},
     Bytes,
 };
 
 use super::{
     cache::{CachedAccount, CachedComponentState, EntityCache},
-    window::{DeltaWindow, WindowResolution},
+    window::{account_changes, component_changes, DeltaWindow, WindowResolution},
 };
 
 /// Which path answers state requests, holding what the cache modes need: the loaded
@@ -199,12 +202,10 @@ impl StateService {
             .filter(|id| seen.insert(*id))
             .cloned()
             .collect();
-        // Resolve the version and copy the window changes for the page under one window lock, so
-        // both see the same blocks.
-        let (version, window_changes) =
-            self.read_window(&request.protocol_system, &request.version, |window, upto| {
-                window.account_changes(&page, upto)
-            })?;
+        // Resolve the version and copy the window's blocks up to it under one window lock, so both
+        // see the same blocks. The page's changes are collected after the lock is released.
+        let (version, blocks) = self.read_window(&request.protocol_system, &request.version)?;
+        let window_changes = account_changes(&blocks, &page);
 
         // Copy only the `Arc` of each cached entry under the cache read lock, so folds wait for
         // pointer copies rather than for whole storage maps.
@@ -312,12 +313,10 @@ impl StateService {
             .filter(|id| seen.insert(*id))
             .collect();
         let system = &request.protocol_system;
-        // Resolve the version and copy the window changes for the page under one window lock, so
-        // both see the same blocks.
-        let (version, window_changes) =
-            self.read_window(system, &request.version, |window, upto| {
-                window.component_changes(&page, upto)
-            })?;
+        // Resolve the version and copy the window's blocks up to it under one window lock, so both
+        // see the same blocks. The page's changes are collected after the lock is released.
+        let (version, blocks) = self.read_window(system, &request.version)?;
+        let window_changes = component_changes(&blocks, &page);
 
         // Copy the cached entries under the cache read lock; folds wait until it is released.
         let mut entries = Vec::with_capacity(page.len());
@@ -384,16 +383,16 @@ impl StateService {
         ))
     }
 
-    /// Resolves `version` in the window of `protocol_system` and runs `read` on that window, up
-    /// to the resolved block, under one lock: a fold or revert in between could otherwise remove
-    /// the resolved block from the window. Returns the resolved block's write timestamp with what
-    /// `read` returned; the lock is released before this returns.
-    fn read_window<T>(
+    /// Resolves `version` in the window of `protocol_system` and copies the window's blocks up to
+    /// the resolved one, under one lock: a fold or revert in between could otherwise remove the
+    /// resolved block from the window. Only the block `Arc`s are copied, so the lock is held
+    /// briefly. Returns the resolved block's write timestamp with the blocks; the lock is
+    /// released before this returns.
+    fn read_window(
         &self,
         protocol_system: &str,
         version: &dto::VersionParam,
-        read: impl FnOnce(&DeltaWindow, u64) -> Result<T, StorageError>,
-    ) -> Result<(WriteTimestamp, T), StateServiceError> {
+    ) -> Result<(WriteTimestamp, Vec<Arc<BlockAggregatedChanges>>), StateServiceError> {
         let Some(window) = self.windows.get(protocol_system) else {
             return Err(StateServiceError::Fallback(FallbackReason::UnknownSystem));
         };
@@ -418,8 +417,10 @@ impl StateService {
             }
             WindowResolution::AboveTip => return Err(StateServiceError::VersionAboveTip(version)),
         };
-        let value = read(&window, block.number).map_err(StateServiceError::WindowRead)?;
-        Ok((WriteTimestamp::from(&block), value))
+        let blocks = window
+            .blocks_upto(block.number)
+            .map_err(StateServiceError::WindowRead)?;
+        Ok((WriteTimestamp::from(&block), blocks))
     }
 }
 

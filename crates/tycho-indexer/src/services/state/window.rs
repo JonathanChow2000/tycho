@@ -411,106 +411,23 @@ impl DeltaWindow {
             .map(|m| m.block.clone())
     }
 
-    /// Every buffered change to the components `ids` up to block `upto`, ascending by block.
-    /// Ids with no change are absent. An `upto` below the floor yields the floor block alone;
-    /// resolve it first with [`DeltaWindow::resolve`] if that matters.
+    /// The blocks up to `upto`, ascending. Only the `Arc`s are copied, so a reader holds the window
+    /// lock just for this and scans the blocks with [`account_changes`] or [`component_changes`]
+    /// after releasing it. An `upto` below the floor yields the floor block alone; resolve it
+    /// first with [`DeltaWindow::resolve`] if that matters.
     ///
     /// # Errors
     ///
     /// `StorageError::NotFound` when the window is empty.
-    pub(crate) fn component_changes(
+    pub(crate) fn blocks_upto(
         &self,
-        ids: &[&str],
         upto: u64,
-    ) -> Result<HashMap<String, Vec<ComponentChange>>, StorageError> {
-        // The requested ids as a set. Each block is scanned by its own changed keys, which are
-        // usually far fewer than a full page of ids, and each key is checked against this set.
-        let requested: HashSet<&str> = ids.iter().copied().collect();
-
-        let mut changes: HashMap<String, Vec<ComponentChange>> = HashMap::new();
-        // Reused across blocks: the requested ids the current block touches. An id present in
-        // several of the block's maps is collected once, so the block yields one change per id.
-        let mut touched: HashSet<&str> = HashSet::new();
-        for entry in self.blocks(None, Some(BlockNumberOrTimestamp::Number(upto)))? {
-            // Collect the requested ids this block changed the state or balances of.
-            touched.clear();
-            touched.extend(
-                entry
-                    .state_deltas
-                    .keys()
-                    .chain(entry.component_balances.keys())
-                    .map(String::as_str)
-                    .filter(|id| requested.contains(id)),
-            );
-
-            // Record one change per touched id, stamped with the block.
-            let at = WriteTimestamp::from(&entry.block);
-            for &id in &touched {
-                let delta = entry.state_deltas.get(id).cloned();
-                let balances = entry
-                    .component_balances
-                    .get(id)
-                    .cloned();
-                changes
-                    .entry(id.to_string())
-                    .or_default()
-                    .push(ComponentChange { at, delta, balances });
-            }
-        }
-        Ok(changes)
-    }
-
-    /// Every buffered change to the accounts `addresses` up to block `upto`, ascending by block.
-    /// Addresses with no change are absent. An `upto` below the floor yields the floor block
-    /// alone; resolve it first with [`DeltaWindow::resolve`] if that matters.
-    ///
-    /// # Errors
-    ///
-    /// `StorageError::NotFound` when the window is empty.
-    pub(crate) fn account_changes(
-        &self,
-        addresses: &[Bytes],
-        upto: u64,
-    ) -> Result<HashMap<Bytes, Vec<AccountChange>>, StorageError> {
-        // The requested addresses as a set. Each block is scanned by its own changed keys, which
-        // are usually far fewer than a full page of addresses, and each key is checked against
-        // this set.
-        let requested: HashSet<&Bytes> = addresses.iter().collect();
-
-        let mut changes: HashMap<Bytes, Vec<AccountChange>> = HashMap::new();
-        // Reused across blocks: the requested addresses the current block touches. An address
-        // present in both of the block's maps is collected once, so the block yields one change
-        // per address.
-        let mut touched: HashSet<&Bytes> = HashSet::new();
-        for entry in self.blocks(None, Some(BlockNumberOrTimestamp::Number(upto)))? {
-            // Collect the requested addresses this block changed the state or token balances of.
-            touched.clear();
-            touched.extend(
-                entry
-                    .account_deltas
-                    .keys()
-                    .chain(entry.account_balances.keys())
-                    .filter(|address| requested.contains(address)),
-            );
-
-            // Record one change per touched address, stamped with the block.
-            let at = WriteTimestamp::from(&entry.block);
-            for &address in &touched {
-                let delta = entry
-                    .account_deltas
-                    .get(address)
-                    .cloned();
-                let balances = entry
-                    .account_balances
-                    .get(address)
-                    .cloned();
-                changes
-                    .entry(address.clone())
-                    .or_default()
-                    .push(AccountChange { at, delta, balances });
-            }
-        }
-        Ok(changes)
+    ) -> Result<Vec<Arc<BlockAggregatedChanges>>, StorageError> {
+        Ok(self
+            .buffer
+            .get_block_range(None, Some(BlockNumberOrTimestamp::Number(upto)))?
+            .cloned()
+            .collect())
     }
 
     /// Resolves a requested version to a servable window block, from memory only.
@@ -574,6 +491,95 @@ impl DeltaWindow {
             None => WindowResolution::AboveTip,
         }
     }
+}
+
+/// Every change in `blocks` to the components `ids`, in block order. Ids with no change are absent.
+pub(crate) fn component_changes(
+    blocks: &[Arc<BlockAggregatedChanges>],
+    ids: &[&str],
+) -> HashMap<String, Vec<ComponentChange>> {
+    // The requested ids as a set. Each block is scanned by its own changed keys, which are
+    // usually far fewer than a full page of ids, and each key is checked against this set.
+    let requested: HashSet<&str> = ids.iter().copied().collect();
+
+    let mut changes: HashMap<String, Vec<ComponentChange>> = HashMap::new();
+    // Reused across blocks: the requested ids the current block touches. An id present in
+    // several of the block's maps is collected once, so the block yields one change per id.
+    let mut touched: HashSet<&str> = HashSet::new();
+    for entry in blocks {
+        // Collect the requested ids this block changed the state or balances of.
+        touched.clear();
+        touched.extend(
+            entry
+                .state_deltas
+                .keys()
+                .chain(entry.component_balances.keys())
+                .map(String::as_str)
+                .filter(|id| requested.contains(id)),
+        );
+
+        // Record one change per touched id, stamped with the block.
+        let at = WriteTimestamp::from(&entry.block);
+        for &id in &touched {
+            let delta = entry.state_deltas.get(id).cloned();
+            let balances = entry
+                .component_balances
+                .get(id)
+                .cloned();
+            changes
+                .entry(id.to_string())
+                .or_default()
+                .push(ComponentChange { at, delta, balances });
+        }
+    }
+    changes
+}
+
+/// Every change in `blocks` to the accounts `addresses`, in block order. Addresses with no change
+/// are absent.
+pub(crate) fn account_changes(
+    blocks: &[Arc<BlockAggregatedChanges>],
+    addresses: &[Bytes],
+) -> HashMap<Bytes, Vec<AccountChange>> {
+    // The requested addresses as a set. Each block is scanned by its own changed keys, which
+    // are usually far fewer than a full page of addresses, and each key is checked against
+    // this set.
+    let requested: HashSet<&Bytes> = addresses.iter().collect();
+
+    let mut changes: HashMap<Bytes, Vec<AccountChange>> = HashMap::new();
+    // Reused across blocks: the requested addresses the current block touches. An address
+    // present in both of the block's maps is collected once, so the block yields one change
+    // per address.
+    let mut touched: HashSet<&Bytes> = HashSet::new();
+    for entry in blocks {
+        // Collect the requested addresses this block changed the state or token balances of.
+        touched.clear();
+        touched.extend(
+            entry
+                .account_deltas
+                .keys()
+                .chain(entry.account_balances.keys())
+                .filter(|address| requested.contains(address)),
+        );
+
+        // Record one change per touched address, stamped with the block.
+        let at = WriteTimestamp::from(&entry.block);
+        for &address in &touched {
+            let delta = entry
+                .account_deltas
+                .get(address)
+                .cloned();
+            let balances = entry
+                .account_balances
+                .get(address)
+                .cloned();
+            changes
+                .entry(address.clone())
+                .or_default()
+                .push(AccountChange { at, delta, balances });
+        }
+    }
+    changes
 }
 
 #[cfg(test)]
@@ -723,12 +729,8 @@ mod test {
             put(&mut w, m).unwrap();
         }
 
-        let components = w
-            .component_changes(&["c1", "absent"], 5)
-            .unwrap();
-        let accounts = w
-            .account_changes(std::slice::from_ref(&address), 5)
-            .unwrap();
+        let components = component_changes(&w.blocks_upto(5).unwrap(), &["c1", "absent"]);
+        let accounts = account_changes(&w.blocks_upto(5).unwrap(), std::slice::from_ref(&address));
 
         let component_blocks: Vec<u64> = components["c1"]
             .iter()
@@ -757,9 +759,7 @@ mod test {
                 .unwrap();
         }
 
-        let changes = w
-            .component_changes(&["c1"], 42)
-            .unwrap();
+        let changes = component_changes(&w.blocks_upto(42).unwrap(), &["c1"]);
         let blocks = changes["c1"]
             .iter()
             .map(|change| change.at.block_number())
@@ -786,10 +786,8 @@ mod test {
         put(&mut w, with_component_balance(msg(1, 0, None), "c1")).unwrap();
         put(&mut w, with_account_balance(msg(2, 0, None), &address)).unwrap();
 
-        let components = w.component_changes(&["c1"], 2).unwrap();
-        let accounts = w
-            .account_changes(std::slice::from_ref(&address), 2)
-            .unwrap();
+        let components = component_changes(&w.blocks_upto(2).unwrap(), &["c1"]);
+        let accounts = account_changes(&w.blocks_upto(2).unwrap(), std::slice::from_ref(&address));
 
         assert_eq!(
             components["c1"],
@@ -823,10 +821,8 @@ mod test {
         let mut w = window(128, 1);
         put(&mut w, m).unwrap();
 
-        let components = w.component_changes(&["c1"], 1).unwrap();
-        let accounts = w
-            .account_changes(std::slice::from_ref(&address), 1)
-            .unwrap();
+        let components = component_changes(&w.blocks_upto(1).unwrap(), &["c1"]);
+        let accounts = account_changes(&w.blocks_upto(1).unwrap(), std::slice::from_ref(&address));
 
         let [component] = components["c1"].as_slice() else {
             panic!("expected one component change, got {:?}", components["c1"]);
@@ -845,7 +841,7 @@ mod test {
             put(&mut w, testing::with_state_delta(msg(n, 0, None), "c1", n)).unwrap();
         }
 
-        let changes = w.component_changes(&["c1"], 2).unwrap();
+        let changes = component_changes(&w.blocks_upto(2).unwrap(), &["c1"]);
 
         let blocks: Vec<u64> = changes["c1"]
             .iter()
@@ -855,14 +851,10 @@ mod test {
     }
 
     #[test]
-    fn changes_on_an_empty_window_are_not_found() {
+    fn blocks_upto_on_an_empty_window_are_not_found() {
         let w = window(128, 1);
 
-        assert!(matches!(w.component_changes(&["c1"], 1), Err(StorageError::NotFound(..))));
-        assert!(matches!(
-            w.account_changes(&[Bytes::default()], 1),
-            Err(StorageError::NotFound(..))
-        ));
+        assert!(matches!(w.blocks_upto(1), Err(StorageError::NotFound(..))));
     }
 
     #[test]
