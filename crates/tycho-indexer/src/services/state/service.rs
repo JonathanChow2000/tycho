@@ -225,6 +225,10 @@ impl StateService {
                 // serves its own state, so one extractor's delay or removal cannot change
                 // another's answers. An address with no delta here fails the whole request. The
                 // database path scans every window instead.
+                // Token balances from blocks before the first delta are dropped, as on the
+                // database path.
+                // TODO: keep token balances an address received before its first delta, e.g. tokens
+                // sent to a CREATE2 address before the contract is deployed.
                 // TODO: serve unknown ids the same way for accounts and components: both as an
                 // empty entity or both as an error.
                 None => {
@@ -421,7 +425,7 @@ mod test {
     use rstest::rstest;
     use tycho_common::models::{
         blockchain::BlockAggregatedChanges,
-        contract::AccountDelta,
+        contract::{AccountBalance, AccountDelta},
         protocol::{ComponentBalance, ProtocolComponent, ProtocolComponentStateDelta},
         Chain, ChangeType,
     };
@@ -497,6 +501,27 @@ mod test {
     fn with_account(mut m: BlockAggregatedChanges, delta: AccountDelta) -> BlockAggregatedChanges {
         m.account_deltas
             .insert(delta.address.clone(), delta);
+        m
+    }
+
+    fn with_account_balance(
+        mut m: BlockAggregatedChanges,
+        account: &Bytes,
+        token: &Bytes,
+        amount: u64,
+    ) -> BlockAggregatedChanges {
+        m.account_balances
+            .entry(account.clone())
+            .or_default()
+            .insert(
+                token.clone(),
+                AccountBalance::new(
+                    account.clone(),
+                    token.clone(),
+                    Bytes::from(amount),
+                    Bytes::default(),
+                ),
+            );
         m
     }
 
@@ -622,6 +647,60 @@ mod test {
 
         assert_eq!(response.accounts.len(), 1);
         assert_eq!(response.accounts[0].slots[&word(1)], word(expected));
+    }
+
+    #[test]
+    fn contract_state_builds_an_uncached_account_from_its_first_delta() {
+        let harness = Harness::new(10);
+        let (account, early_token, token) = (addr(2), addr(9), addr(10));
+        harness.push(with_account_balance(msg(6), &account, &early_token, 6));
+        harness.push(with_account_balance(
+            with_account(msg(7), account_delta(&account, 7, ChangeType::Creation)),
+            &account,
+            &token,
+            8,
+        ));
+
+        let at_6 = harness
+            .service
+            .contract_state(&contract_request(vec![account.clone()], at_block(6)));
+        let at_7 = harness
+            .service
+            .contract_state(&contract_request(vec![account], at_block(7)))
+            .unwrap();
+
+        // Block 6 changed only a balance, so the address does not exist yet, and that balance is
+        // dropped once block 7 creates the address.
+        assert!(
+            matches!(
+                at_6,
+                Err(StateServiceError::Rpc(RpcError::Storage(StorageError::NotFound(..))))
+            ),
+            "{at_6:?}"
+        );
+        assert_eq!(at_7.accounts[0].slots[&word(1)], word(7));
+        assert_eq!(at_7.accounts[0].token_balances, HashMap::from([(token, Bytes::from(8u64))]));
+    }
+
+    #[test]
+    fn contract_state_without_a_delta_for_an_uncached_account_is_not_found() {
+        let harness = Harness::new(10);
+        let (account, token) = (addr(2), addr(9));
+        harness.push(with_account_balance(msg(6), &account, &token, 6));
+        harness.push(with_account_balance(msg(7), &account, &token, 7));
+
+        let result = harness
+            .service
+            .contract_state(&contract_request(vec![account], at_block(7)));
+
+        assert!(
+            matches!(
+                result,
+                Err(StateServiceError::Rpc(RpcError::Storage(StorageError::NotFound(ref kind, _))))
+                    if kind == "Contract"
+            ),
+            "{result:?}"
+        );
     }
 
     #[test]
