@@ -577,10 +577,7 @@ where
                 };
                 let protocol_components = self
                     .get_protocol_components_inner(req)
-                    .await
-                    .map_err(|err| {
-                        RpcError::Unknown(format!("Failed to get protocol component IDs: {err}"))
-                    })?;
+                    .await?;
                 let total_components = protocol_components.pagination.total;
                 (
                     protocol_components
@@ -1989,6 +1986,39 @@ mod tests {
             vec![],
         )
         .with_state_service(setup)
+    }
+
+    /// A request without ids lists the component ids first; a failure there keeps its status.
+    #[tokio::test]
+    async fn test_get_protocol_state_without_ids_keeps_the_component_lookup_error() {
+        let mut gw = MockGateway::new();
+        gw.expect_get_protocol_components()
+            .return_once(|_, _, _, _, _| {
+                Box::pin(async {
+                    Err(StorageError::NotFound("ProtocolComponent".to_string(), "ex".to_string()))
+                })
+            });
+        let handler = RpcHandler::new(
+            gw,
+            None,
+            MockEntryPointTracer::new(),
+            PlansConfig::default(),
+            vec![],
+            vec![],
+        );
+
+        let result = handler
+            .get_protocol_state_inner(dto::ProtocolStateRequestBody {
+                protocol_ids: None,
+                protocol_system: "ex".to_string(),
+                chain: dto::Chain::Ethereum,
+                include_balances: true,
+                version: dto::VersionParam::at_block(dto::Chain::Ethereum, 1),
+                pagination: dto::PaginationParams::new(0, 100),
+            })
+            .await;
+
+        assert!(matches!(result, Err(RpcError::Storage(StorageError::NotFound(..)))), "{result:?}");
     }
 
     /// A state service failure gets the body the database path returns for the same failure.
