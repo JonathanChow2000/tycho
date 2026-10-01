@@ -122,6 +122,10 @@ pub(crate) enum WindowResolution {
     InWindow(Block),
     /// The version is older than the window floor.
     BelowFloor,
+    /// The window holds no block: at startup, or after the extractor restarted.
+    Empty,
+    /// The version is a block hash the window does not hold.
+    UnknownHash,
     /// The version is newer than the newest block this window has seen.
     AboveTip,
 }
@@ -526,7 +530,7 @@ impl DeltaWindow {
     /// An empty window reports `BelowFloor` for every version.
     pub(crate) fn resolve(&self, version: &BlockOrTimestamp) -> WindowResolution {
         let (Some(oldest), Some(tip)) = (self.buffer.oldest(), self.buffer.newest()) else {
-            return WindowResolution::BelowFloor;
+            return WindowResolution::Empty;
         };
         let version = match version {
             BlockOrTimestamp::Block(BlockIdentifier::Hash(hash)) => {
@@ -534,7 +538,7 @@ impl DeltaWindow {
                     .blocks(None, None)
                     .ok()
                     .and_then(|mut blocks| blocks.find(|b| &b.block.hash == hash))
-                    .map_or(WindowResolution::BelowFloor, |b| {
+                    .map_or(WindowResolution::UnknownHash, |b| {
                         WindowResolution::InWindow(b.block.clone())
                     });
             }
@@ -1137,7 +1141,7 @@ mod test {
     )]
     #[case::hash_not_in_window(
         BlockOrTimestamp::Block(BlockIdentifier::Hash(testing::block(11).hash)),
-        WindowResolution::BelowFloor
+        WindowResolution::UnknownHash
     )]
     #[case::latest(
         BlockOrTimestamp::Block(BlockIdentifier::Latest(Chain::Ethereum)),
@@ -1172,8 +1176,8 @@ mod test {
     #[rstest]
     #[case::number(number(1))]
     #[case::latest(BlockOrTimestamp::Block(BlockIdentifier::Latest(Chain::Ethereum)))]
-    fn resolve_on_an_empty_window_is_below_floor(#[case] version: BlockOrTimestamp) {
-        assert_eq!(window(3, 1).resolve(&version), WindowResolution::BelowFloor);
+    fn resolve_on_an_empty_window_is_empty(#[case] version: BlockOrTimestamp) {
+        assert_eq!(window(3, 1).resolve(&version), WindowResolution::Empty);
     }
 
     #[test]

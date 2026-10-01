@@ -178,6 +178,9 @@ where
         mut self,
         state_service: EntityCacheSetup<Arc<StateService>>,
     ) -> Self {
+        if matches!(state_service, EntityCacheSetup::Serve(_)) {
+            register_db_path_counters();
+        }
         self.state_service = state_service;
         self
     }
@@ -1185,6 +1188,17 @@ where
 fn count_db_path(endpoint: &'static str, reason: FallbackReason) {
     metrics::counter!("db_path_requests", "endpoint" => endpoint, "reason" => reason.as_str())
         .increment(1);
+}
+
+/// Registers every `db_path_requests` series at zero. Alerts read the first value of a new series
+/// as growth, so a series that first appears on its first fallback would fire them.
+fn register_db_path_counters() {
+    for endpoint in ["contract_state", "protocol_state"] {
+        for reason in FallbackReason::ALL {
+            metrics::counter!("db_path_requests", "endpoint" => endpoint, "reason" => reason.as_str())
+                .increment(0);
+        }
+    }
 }
 
 /// Retrieve contract states

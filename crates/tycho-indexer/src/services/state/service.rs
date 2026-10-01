@@ -85,6 +85,10 @@ impl<T> EntityCacheSetup<T> {
 pub(crate) enum FallbackReason {
     /// The version is below the window.
     BelowWindow,
+    /// The window holds no block: at startup, or after the extractor restarted.
+    EmptyWindow,
+    /// The version is a block hash the window does not hold.
+    UnknownHash,
     /// A cached entry is newer than the version: a fold landed during the read, or another
     /// extractor that shares the account is ahead of this one.
     EntryNewer,
@@ -96,10 +100,22 @@ pub(crate) enum FallbackReason {
 }
 
 impl FallbackReason {
+    /// Every reason, to register each metric series at zero.
+    pub(crate) const ALL: [Self; 6] = [
+        Self::BelowWindow,
+        Self::EmptyWindow,
+        Self::UnknownHash,
+        Self::EntryNewer,
+        Self::NoIds,
+        Self::UnknownSystem,
+    ];
+
     /// Label for the `db_path_requests` metric.
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::BelowWindow => "below_window",
+            Self::EmptyWindow => "empty_window",
+            Self::UnknownHash => "unknown_hash",
             Self::EntryNewer => "entry_newer",
             Self::NoIds => "no_ids",
             Self::UnknownSystem => "unknown_system",
@@ -377,6 +393,12 @@ impl StateService {
             WindowResolution::InWindow(block) => block,
             WindowResolution::BelowFloor => {
                 return Err(StateServiceError::Fallback(FallbackReason::BelowWindow))
+            }
+            WindowResolution::Empty => {
+                return Err(StateServiceError::Fallback(FallbackReason::EmptyWindow))
+            }
+            WindowResolution::UnknownHash => {
+                return Err(StateServiceError::Fallback(FallbackReason::UnknownHash))
             }
             WindowResolution::AboveTip => {
                 return Err(RpcError::Storage(StorageError::NotFound(
