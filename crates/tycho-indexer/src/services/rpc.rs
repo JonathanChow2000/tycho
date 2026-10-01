@@ -281,11 +281,7 @@ where
         &self,
         request: dto::StateRequestBody,
     ) -> Result<dto::StateRequestResponse, RpcError> {
-        // The cache serves explicit ids only; listing every entity stays on the database path.
-        if let Some(service) = self
-            .serving_state_service()
-            .filter(|_| request.contract_ids.is_some())
-        {
+        if let Some(service) = self.serving_state_service() {
             match service.contract_state(&request) {
                 Ok(response) => return Ok(response),
                 Err(StateServiceError::Fallback(reason)) => count_db_path("contract_state", reason),
@@ -526,11 +522,7 @@ where
         &self,
         request: dto::ProtocolStateRequestBody,
     ) -> Result<dto::ProtocolStateRequestResponse, RpcError> {
-        // The cache serves explicit ids only; listing every entity stays on the database path.
-        if let Some(service) = self
-            .serving_state_service()
-            .filter(|_| request.protocol_ids.is_some())
-        {
+        if let Some(service) = self.serving_state_service() {
             match service.protocol_state(&request) {
                 Ok(response) => return Ok(response),
                 Err(StateServiceError::Fallback(reason)) => count_db_path("protocol_state", reason),

@@ -88,6 +88,8 @@ pub(crate) enum FallbackReason {
     /// A cached entry is newer than the version: a fold landed during the read, or another
     /// extractor that shares the account is ahead of this one.
     EntryNewer,
+    /// The request has no ids, so it lists every entity.
+    NoIds,
 }
 
 impl FallbackReason {
@@ -96,6 +98,7 @@ impl FallbackReason {
         match self {
             Self::BelowWindow => "below_window",
             Self::EntryNewer => "entry_newer",
+            Self::NoIds => "no_ids",
         }
     }
 }
@@ -135,11 +138,10 @@ impl StateService {
     ///
     /// # Errors
     ///
-    /// [`StateServiceError::Fallback`] when the cache cannot rebuild the version. Otherwise
+    /// [`StateServiceError::Fallback`] when the cache cannot rebuild the version or the request
+    /// has no `contract_ids`. Otherwise
     /// [`StateServiceError::Rpc`] with:
     ///
-    /// - `RpcError::Parse` (400) when `contract_ids` is `None`: the cache serves explicit ids only,
-    ///   and the RPC handler sends a request without ids to the database path.
     /// - `RpcError::Storage(StorageError::NotFound("Contract", ..))` when an address is neither
     ///   cached nor changed by a delta in the window.
     /// - `RpcError::Parse` (400) when the version is malformed, or `protocol_system` is empty or
@@ -152,10 +154,10 @@ impl StateService {
         &self,
         request: &dto::StateRequestBody,
     ) -> Result<dto::StateRequestResponse, StateServiceError> {
-        let ids = request
-            .contract_ids
-            .as_deref()
-            .ok_or_else(|| RpcError::Parse("contract_ids are required".to_string()))?;
+        // The cache serves explicit ids only; the database path lists every entity.
+        let Some(ids) = request.contract_ids.as_deref() else {
+            return Err(StateServiceError::Fallback(FallbackReason::NoIds));
+        };
         // Slice the page out of the requested ids, like the database path does.
         let pagination = PaginationParams::from(&request.pagination);
         let page: Vec<Bytes> = ids
@@ -260,10 +262,10 @@ impl StateService {
         &self,
         request: &dto::ProtocolStateRequestBody,
     ) -> Result<dto::ProtocolStateRequestResponse, StateServiceError> {
-        let ids = request
-            .protocol_ids
-            .as_deref()
-            .ok_or_else(|| RpcError::Parse("protocol_ids are required".to_string()))?;
+        // The cache serves explicit ids only; the database path lists every entity.
+        let Some(ids) = request.protocol_ids.as_deref() else {
+            return Err(StateServiceError::Fallback(FallbackReason::NoIds));
+        };
         // Slice the page out of the requested ids, like the database path does.
         let pagination = PaginationParams::from(&request.pagination);
         let page: Vec<&str> = ids
@@ -705,20 +707,25 @@ mod test {
     }
 
     #[test]
-    fn contract_state_rejects_requests_without_ids_or_with_an_unknown_system() {
+    fn contract_state_without_ids_falls_back() {
         let harness = accounts();
-        let mut without_ids = contract_request(vec![], dto::VersionParam::default());
-        without_ids.contract_ids = None;
-        let mut unknown_system = contract_request(vec![addr(1)], dto::VersionParam::default());
-        unknown_system.protocol_system = "unknown".to_string();
+        let mut request = contract_request(vec![], dto::VersionParam::default());
+        request.contract_ids = None;
 
-        for request in [without_ids, unknown_system] {
-            let result = harness.service.contract_state(&request);
-            assert!(
-                matches!(result, Err(StateServiceError::Rpc(RpcError::Parse(_)))),
-                "{result:?}"
-            );
-        }
+        let result = harness.service.contract_state(&request);
+
+        assert!(matches!(result, Err(StateServiceError::Fallback(FallbackReason::NoIds))));
+    }
+
+    #[test]
+    fn contract_state_rejects_an_unknown_system() {
+        let harness = accounts();
+        let mut request = contract_request(vec![addr(1)], dto::VersionParam::default());
+        request.protocol_system = "unknown".to_string();
+
+        let result = harness.service.contract_state(&request);
+
+        assert!(matches!(result, Err(StateServiceError::Rpc(RpcError::Parse(_)))), "{result:?}");
     }
 
     #[rstest]
