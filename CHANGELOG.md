@@ -1,3 +1,12 @@
+## [0.432.0](https://github.com/propeller-heads/tycho/compare/0.431.0...0.432.0) (2026-10-01)
+
+
+### Features
+
+* **common:** add ProtocolSim::set_pending_overrides ([45eb33a](https://github.com/propeller-heads/tycho/commit/45eb33af74f554c63cf158caabd8fe93d9f2eb70))
+* **simulation:** run uniswap v4 hooks under pending block overrides ([a2141b9](https://github.com/propeller-heads/tycho/commit/a2141b9ee12d9723a35da4f5ae86ed8f1b464494))
+* **simulation:** run uniswap v4 hooks under pending block overrides ([#1506](https://github.com/propeller-heads/tycho/issues/1506)) ([fe94231](https://github.com/propeller-heads/tycho/commit/fe94231c84ca4ae7a3fdf120a204840b655579bf))
+
 ## [0.431.0](https://github.com/propeller-heads/tycho/compare/0.430.2...0.431.0) (2026-09-30)
 
 
