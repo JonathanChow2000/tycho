@@ -288,7 +288,7 @@ where
             match service.contract_state(&request) {
                 Ok(response) => return Ok(response),
                 Err(StateServiceError::Fallback(reason)) => count_db_path("contract_state", reason),
-                Err(StateServiceError::Rpc(err)) => return Err(err),
+                Err(err) => return Err(err.into()),
             }
         }
         self.get_contract_state_inner(request)
@@ -529,7 +529,7 @@ where
             match service.protocol_state(&request) {
                 Ok(response) => return Ok(response),
                 Err(StateServiceError::Fallback(reason)) => count_db_path("protocol_state", reason),
-                Err(StateServiceError::Rpc(err)) => return Err(err),
+                Err(err) => return Err(err.into()),
             }
         }
         self.get_protocol_state_inner(request)
@@ -1181,6 +1181,31 @@ where
             // error for the whole batch
             .map_err(|e| RpcError::Unknown(format!("Error while tracing entry points: {e:?}")))?;
         Ok(trace_results)
+    }
+}
+
+/// The response to a state service failure: the body the database path returns for the same
+/// failure.
+impl From<StateServiceError> for RpcError {
+    fn from(err: StateServiceError) -> Self {
+        match err {
+            // The routing match answers a fallback from the database path before converting.
+            StateServiceError::Fallback(reason) => {
+                RpcError::Unknown(format!("Unhandled entity cache fallback: {reason:?}"))
+            }
+            StateServiceError::InvalidVersion(reason) => RpcError::Parse(reason),
+            StateServiceError::VersionAboveTip(version) => RpcError::Storage(
+                StorageError::NotFound("Version".to_string(), format!("{version:?}")),
+            ),
+            StateServiceError::ContractNotFound(address) => RpcError::Storage(
+                StorageError::NotFound("Contract".to_string(), address.to_string()),
+            ),
+            StateServiceError::LockPoisoned { system, reason } => {
+                PendingDeltasError::LockError(system, reason).into()
+            }
+            StateServiceError::WindowRead(err) => PendingDeltasError::from(err).into(),
+            StateServiceError::Merge(err) => PendingDeltasError::from(err).into(),
+        }
     }
 }
 
@@ -1964,6 +1989,30 @@ mod tests {
             vec![],
         )
         .with_state_service(setup)
+    }
+
+    /// A state service failure gets the body the database path returns for the same failure.
+    #[tokio::test]
+    async fn test_state_service_version_above_tip_keeps_the_database_path_body() {
+        let err = StateServiceError::VersionAboveTip(BlockOrTimestamp::Block(
+            BlockIdentifier::Number((Chain::Ethereum, 6)),
+        ));
+
+        assert_eq!(
+            RpcError::from(err).to_string(),
+            "Failed to get storage: Could not find Version with id `Block(Number((Ethereum, 6)))`!"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_state_service_contract_not_found_keeps_the_database_path_body() {
+        let err = StateServiceError::ContractNotFound(Bytes::from(4u64).lpad(20, 0));
+
+        assert_eq!(
+            RpcError::from(err).to_string(),
+            "Failed to get storage: Could not find Contract with id \
+             `0x0000000000000000000000000000000000000004`!"
+        );
     }
 
     #[rstest]

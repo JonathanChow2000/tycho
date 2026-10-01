@@ -45,7 +45,6 @@ use super::{
     cache::{CachedAccount, CachedComponentState, EntityCache},
     window::{DeltaWindow, WindowResolution},
 };
-use crate::services::{deltas_buffer::PendingDeltasError, rpc::RpcError};
 
 /// Which path answers state requests, holding what the cache modes need: the loaded
 /// [`EntityCache`] when building the services, the [`StateService`] once built.
@@ -123,16 +122,31 @@ impl FallbackReason {
     }
 }
 
-/// Why the state service did not answer a request.
+/// Why the state service did not answer a request. The RPC handler picks the response for each.
 #[derive(Debug, Error)]
 pub(crate) enum StateServiceError {
     /// The cache cannot answer this request; the database path answers it instead. See the
     /// module doc for when this happens.
     #[error("Entity cache fallback: {0:?}")]
     Fallback(FallbackReason),
-    /// The request is invalid; the client gets this error.
-    #[error(transparent)]
-    Rpc(#[from] RpcError),
+    /// The requested version cannot be parsed.
+    #[error("Invalid version: {0}")]
+    InvalidVersion(String),
+    /// The version is a block number above the window tip.
+    #[error("Version {0:?} is above the window tip")]
+    VersionAboveTip(BlockOrTimestamp),
+    /// An uncached address has no delta in this extractor's window.
+    #[error("Contract {0} not found")]
+    ContractNotFound(Bytes),
+    /// The window lock of `system` is poisoned.
+    #[error("Window lock of {system} is poisoned: {reason}")]
+    LockPoisoned { system: String, reason: String },
+    /// The window cannot be read.
+    #[error("Window cannot be read: {0}")]
+    WindowRead(StorageError),
+    /// A window change cannot be merged into an entry.
+    #[error("Window change cannot be merged: {0}")]
+    Merge(#[from] MergeError),
 }
 
 /// Answers state requests from the delta windows and the entity cache. Never reads the database.
@@ -158,17 +172,14 @@ impl StateService {
     ///
     /// # Errors
     ///
-    /// [`StateServiceError::Fallback`] when the cache cannot rebuild the version, the request has
-    /// no `contract_ids`, or no window exists for `protocol_system`. Otherwise
-    /// [`StateServiceError::Rpc`] with:
-    ///
-    /// - `RpcError::Storage(StorageError::NotFound("Contract", ..))` when an address is neither
-    ///   cached nor changed by a delta in the window.
-    /// - `RpcError::Parse` (400) when the version is malformed.
-    /// - `RpcError::DeltasError` (500) when the window cannot be read or a change cannot be merged,
-    ///   as on the database path.
-    /// - `RpcError::Storage(StorageError::NotFound("Version", ..))` when the version is a block
-    ///   number above the tip, with the database path's body.
+    /// - [`StateServiceError::Fallback`] when the cache cannot rebuild the version, the request has
+    ///   no `contract_ids`, or no window exists for `protocol_system`.
+    /// - [`StateServiceError::ContractNotFound`] when an address is neither cached nor changed by a
+    ///   delta in the window.
+    /// - [`StateServiceError::InvalidVersion`] when the version is malformed.
+    /// - [`StateServiceError::VersionAboveTip`] when the version is a block number above the tip.
+    /// - [`StateServiceError::LockPoisoned`], [`StateServiceError::WindowRead`] or
+    ///   [`StateServiceError::Merge`] when the window cannot be read or a change cannot be merged.
     pub(crate) fn contract_state(
         &self,
         request: &dto::StateRequestBody,
@@ -243,11 +254,7 @@ impl StateService {
                                     .map(|delta| (i, delta))
                             })
                     else {
-                        return Err(RpcError::Storage(StorageError::NotFound(
-                            "Contract".to_string(),
-                            address.to_string(),
-                        ))
-                        .into());
+                        return Err(StateServiceError::ContractNotFound(address.clone()));
                     };
                     let first = &changes[start];
                     (
@@ -342,7 +349,6 @@ impl StateService {
                 || ProtocolComponentState::new(id, HashMap::new(), HashMap::new()),
                 ProtocolComponentState::from,
             );
-            let merge_error = |err: MergeError| RpcError::from(PendingDeltasError::from(err));
             for change in window_changes
                 .get(*id)
                 .into_iter()
@@ -351,14 +357,10 @@ impl StateService {
                 .filter(|change| updated_at.is_none_or(|at| change.at > at))
             {
                 if let Some(delta) = &change.delta {
-                    state
-                        .apply_state_delta(delta)
-                        .map_err(merge_error)?;
+                    state.apply_state_delta(delta)?;
                 }
                 if let Some(balances) = &change.balances {
-                    state
-                        .apply_balance_delta(balances)
-                        .map_err(merge_error)?;
+                    state.apply_balance_delta(balances)?;
                 }
             }
             if !request.include_balances {
@@ -386,13 +388,14 @@ impl StateService {
         let Some(window) = self.windows.get(protocol_system) else {
             return Err(StateServiceError::Fallback(FallbackReason::UnknownSystem));
         };
-        let version = BlockOrTimestamp::try_from(version).map_err(RpcError::from)?;
-        let window = window.lock().map_err(|err| {
-            RpcError::from(PendingDeltasError::LockError(
-                protocol_system.to_string(),
-                err.to_string(),
-            ))
-        })?;
+        let version = BlockOrTimestamp::try_from(version)
+            .map_err(|err| StateServiceError::InvalidVersion(err.to_string()))?;
+        let window = window
+            .lock()
+            .map_err(|err| StateServiceError::LockPoisoned {
+                system: protocol_system.to_string(),
+                reason: err.to_string(),
+            })?;
         let block = match window.resolve(&version) {
             WindowResolution::InWindow(block) => block,
             WindowResolution::BelowFloor => {
@@ -404,16 +407,9 @@ impl StateService {
             WindowResolution::UnknownHash => {
                 return Err(StateServiceError::Fallback(FallbackReason::UnknownHash))
             }
-            WindowResolution::AboveTip => {
-                return Err(RpcError::Storage(StorageError::NotFound(
-                    "Version".to_string(),
-                    format!("{version:?}"),
-                ))
-                .into())
-            }
+            WindowResolution::AboveTip => return Err(StateServiceError::VersionAboveTip(version)),
         };
-        let value = read(&window, block.number)
-            .map_err(|err| RpcError::from(PendingDeltasError::from(err)))?;
+        let value = read(&window, block.number).map_err(StateServiceError::WindowRead)?;
         Ok((WriteTimestamp::from(&block), value))
     }
 }
@@ -672,10 +668,7 @@ mod test {
         // Block 6 changed only a balance, so the address does not exist yet, and that balance is
         // dropped once block 7 creates the address.
         assert!(
-            matches!(
-                at_6,
-                Err(StateServiceError::Rpc(RpcError::Storage(StorageError::NotFound(..))))
-            ),
+            matches!(at_6, Err(StateServiceError::ContractNotFound(ref address)) if *address == addr(2)),
             "{at_6:?}"
         );
         assert_eq!(at_7.accounts[0].slots[&word(1)], word(7));
@@ -694,11 +687,7 @@ mod test {
             .contract_state(&contract_request(vec![account], at_block(7)));
 
         assert!(
-            matches!(
-                result,
-                Err(StateServiceError::Rpc(RpcError::Storage(StorageError::NotFound(ref kind, _))))
-                    if kind == "Contract"
-            ),
+            matches!(result, Err(StateServiceError::ContractNotFound(ref address)) if *address == addr(2)),
             "{result:?}"
         );
     }
@@ -715,21 +704,14 @@ mod test {
     }
 
     #[test]
-    fn contract_state_above_the_tip_is_a_version_not_found() {
+    fn contract_state_above_the_tip_is_a_version_above_the_tip() {
         let harness = accounts();
 
         let result = harness
             .service
             .contract_state(&contract_request(vec![addr(1)], at_block(6)));
 
-        // The body the database path answers with: the storage error alone.
-        let Err(StateServiceError::Rpc(RpcError::Storage(err))) = result else {
-            panic!("expected a not-found error, got {result:?}");
-        };
-        assert_eq!(
-            err.to_string(),
-            "Could not find Version with id `Block(Number((Ethereum, 6)))`!"
-        );
+        assert!(matches!(result, Err(StateServiceError::VersionAboveTip(_))), "{result:?}");
     }
 
     #[test]
@@ -783,12 +765,9 @@ mod test {
                 dto::VersionParam::default(),
             ));
 
-        let Err(StateServiceError::Rpc(err)) = result else {
-            panic!("expected a not-found error, got {result:?}");
-        };
         assert!(
-            matches!(&err, RpcError::Storage(StorageError::NotFound(entity, id)) if entity == "Contract" && *id == addr(4).to_string()),
-            "{err:?}"
+            matches!(result, Err(StateServiceError::ContractNotFound(ref address)) if *address == addr(4)),
+            "{result:?}"
         );
     }
 
