@@ -724,6 +724,23 @@ mod test {
     }
 
     #[test]
+    fn contract_state_skips_a_block_already_folded_into_the_entry() {
+        let harness = accounts();
+        // A fold that lands after the capture: block 4 is both in the window and in the entry.
+        harness
+            .cache
+            .fold(&with_account(msg(4), account_delta(&addr(1), 4, ChangeType::Update)))
+            .unwrap();
+
+        let response = harness
+            .service
+            .contract_state(&contract_request(vec![addr(1)], dto::VersionParam::default()))
+            .unwrap();
+
+        assert_eq!(response.accounts[0].slots[&word(1)], word(5));
+    }
+
+    #[test]
     fn contract_state_falls_back_when_a_cached_value_is_newer_than_the_version() {
         let harness = accounts();
         // Another extractor that shares the account folds a block past this window's tip.
