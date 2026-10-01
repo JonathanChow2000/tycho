@@ -1162,8 +1162,8 @@ where
         Ok(Update::new(block_number_or_timestamp, updated_states, HashMap::new()))
     }
 
-    /// Sets the pending block's account deltas as overrides on every Uniswap V4 pool the block
-    /// touches: pools with a state delta and pools linked to a written contract.
+    /// Sets the pending block's account deltas as overrides on every Uniswap V4 pool linked to a
+    /// written account.
     ///
     /// A hooked pool prices from its hook's storage, which only the account deltas carry. An
     /// override for an account a hook never reads is inert.
@@ -1174,30 +1174,10 @@ where
         state_guard: &RwLockReadGuard<'_, DecoderState>,
         all_balances: &Balances,
     ) {
-        let mut pools_under_pending_overrides: HashSet<String> = deltas
-            .state_deltas
-            .keys()
-            .cloned()
-            .collect();
+        let mut linked_pools: HashSet<&String> = HashSet::new();
         for account in deltas.account_deltas.keys() {
             if let Some(pools) = state_guard.contracts_map.get(account) {
-                pools_under_pending_overrides.extend(pools.iter().cloned());
-            }
-        }
-
-        // Pools with a state delta are already copies in `updated_states`.
-        for id in &pools_under_pending_overrides {
-            if updated_states.contains_key(id) {
-                continue;
-            }
-            let empty_delta = Self::add_block_info_to_delta(
-                ProtocolStateDelta { component_id: id.clone(), ..Default::default() },
-                current_block.clone(),
-            );
-            if let Err(e) =
-                Self::apply_update(id, empty_delta, updated_states, state_guard, all_balances)
-            {
-                warn!(pool = id, error = %e, "EphemeralDeltaTransitionError");
+                linked_pools.extend(pools);
             }
         }
 
@@ -1206,7 +1186,22 @@ where
             .map(|h| BlockEnvOverrides { number: Some(h.number), timestamp: Some(h.timestamp) });
         let overrides =
             Arc::new(PendingOverrides::from_account_deltas(&deltas.account_deltas, block));
-        for id in &pools_under_pending_overrides {
+        for id in linked_pools {
+            // Add pools that are affected by account_deltas, but don't have their own
+            // state_deltas, to `updated_states`. Pools with a state delta already have their
+            // copies in `updated_states`.
+            if !updated_states.contains_key(id) {
+                let empty_delta = Self::add_block_info_to_delta(
+                    ProtocolStateDelta { component_id: id.clone(), ..Default::default() },
+                    current_block.clone(),
+                );
+                if let Err(e) =
+                    Self::apply_update(id, empty_delta, updated_states, state_guard, all_balances)
+                {
+                    warn!(pool = id, error = %e, "EphemeralDeltaTransitionError");
+                    continue;
+                }
+            }
             if let Some(state) = updated_states
                 .get_mut(id)
                 .and_then(|s| {
@@ -1806,8 +1801,8 @@ mod tests {
         // The mock framework will assert that `delta_transition` was called exactly once
     }
 
-    /// The pending block's account deltas must reach the clone a pending quote runs on, and
-    /// never the stored confirmed state.
+    /// The pending block's account deltas must reach the clone of every pool linked to a written
+    /// account, never a pool the write cannot affect, and never the stored confirmed state.
     #[tokio::test]
     async fn test_apply_deltas_ephemeral_sets_pending_overrides_on_the_clone_only() {
         use tycho_common::models::{
@@ -1820,6 +1815,7 @@ mod tests {
         let decoder = TychoStreamDecoder::<BlockHeader>::new(Chain::Ethereum);
         let pool_id = "0xhooked".to_string();
         let quiet_pool_id = "0xhooked-no-log".to_string();
+        let unlinked_pool_id = "0xunlinked".to_string();
         let pool = UniswapV4State::new(
             1000,
             U256::from(1u8) << 96,
@@ -1837,26 +1833,32 @@ mod tests {
                 .insert(pool_id.clone(), Box::new(pool.clone()));
             state
                 .states
-                .insert(quiet_pool_id.clone(), Box::new(pool));
+                .insert(quiet_pool_id.clone(), Box::new(pool.clone()));
+            state
+                .states
+                .insert(unlinked_pool_id.clone(), Box::new(pool));
             state
                 .contracts_map
-                .insert(hook.clone(), HashSet::from([quiet_pool_id.clone()]));
+                .insert(hook.clone(), HashSet::from([pool_id.clone(), quiet_pool_id.clone()]));
         }
 
         let deltas = BlockAggregatedChanges {
             extractor: "uniswap_v4_hooks".to_string(),
-            state_deltas: HashMap::from([(
-                pool_id.clone(),
-                ProtocolComponentStateDelta {
-                    component_id: pool_id.clone(),
-                    updated_attributes: HashMap::from([(
-                        "liquidity".to_string(),
-                        Bytes::from(2000_u64.to_be_bytes().to_vec()),
-                    )]),
-                    deleted_attributes: HashSet::new(),
-                    created_attributes: HashSet::new(),
-                },
-            )]),
+            state_deltas: [&pool_id, &unlinked_pool_id]
+                .into_iter()
+                .map(|id| {
+                    let delta = ProtocolComponentStateDelta {
+                        component_id: id.clone(),
+                        updated_attributes: HashMap::from([(
+                            "liquidity".to_string(),
+                            Bytes::from(2000_u64.to_be_bytes().to_vec()),
+                        )]),
+                        deleted_attributes: HashSet::new(),
+                        created_attributes: HashSet::new(),
+                    };
+                    (id.clone(), delta)
+                })
+                .collect(),
             account_deltas: HashMap::from([(
                 hook.clone(),
                 AccountDelta::new(
@@ -1900,9 +1902,17 @@ mod tests {
             .downcast_ref::<UniswapV4State>()
             .expect("a pool whose hook was written is cloned without a delta of its own");
         assert!(quiet.pending_overrides().is_some());
+        let unlinked = update.states[&unlinked_pool_id]
+            .as_any()
+            .downcast_ref::<UniswapV4State>()
+            .unwrap();
+        assert!(
+            unlinked.pending_overrides().is_none(),
+            "a pool linked to no written account gets no overrides"
+        );
 
         let stored = decoder.state.read().await;
-        for id in [&pool_id, &quiet_pool_id] {
+        for id in [&pool_id, &quiet_pool_id, &unlinked_pool_id] {
             let stored = stored.states[id]
                 .as_any()
                 .downcast_ref::<UniswapV4State>()
