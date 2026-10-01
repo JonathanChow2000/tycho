@@ -11,8 +11,10 @@
 //! its ids, releases it, then takes the cache read lock and copies the entries out. Folds hold the
 //! window lock while they take the cache write lock, so a fold can land between the two steps.
 //! That is harmless: the fold moves blocks from the copied changes into the entries, and a change
-//! applies only when it is newer than the value's write timestamp, so nothing is applied twice or
-//! lost.
+//! applies only when it is newer than the entry's write timestamp, so nothing is applied twice or
+//! lost. Accounts check the timestamp of each value, because several extractors can write one
+//! account. Components check one timestamp for the whole entry, because one extractor writes each
+//! component, in order.
 //! A fold can also carry an entry past the requested version; the request then fails with
 //! [`StateServiceError::VersionTooOld`].
 //!
@@ -40,7 +42,7 @@ use tycho_common::{
 };
 
 use super::{
-    cache::{CachedAccount, EntityCache},
+    cache::{CachedAccount, CachedComponentState, EntityCache},
     window::{DeltaWindow, WindowResolution},
 };
 use crate::services::{deltas_buffer::PendingDeltasError, rpc::RpcError};
@@ -279,14 +281,16 @@ impl StateService {
         }
 
         // Apply the window changes on top of each entry, without holding any lock, with the
-        // database path's merge. The changes hold absolute values in block order, so re-applying
-        // one that a fold already moved into the entry leaves the same state.
+        // database path's merge.
         let mut states = Vec::with_capacity(page.len());
         for (id, entry) in page.iter().zip(entries) {
             // Not cached: start from an empty state, as the database path does for an id it does
             // not hold. An id the window never changed is served as that empty state.
             // TODO: serve unknown ids the same way for accounts and components: both as an empty
             // entity or both as an error.
+            let updated_at = entry
+                .as_ref()
+                .map(CachedComponentState::updated_at);
             let mut state = entry.map_or_else(
                 || ProtocolComponentState::new(id, HashMap::new(), HashMap::new()),
                 ProtocolComponentState::from,
@@ -296,6 +300,8 @@ impl StateService {
                 .get(*id)
                 .into_iter()
                 .flatten()
+                // Skip blocks a fold already moved into the entry.
+                .filter(|change| updated_at.is_none_or(|at| change.at > at))
             {
                 if let Some(delta) = &change.delta {
                     state
@@ -777,7 +783,7 @@ mod test {
     }
 
     #[test]
-    fn protocol_state_reapplies_a_block_already_folded_into_the_entry() {
+    fn protocol_state_skips_a_block_already_folded_into_the_entry() {
         let harness = components();
         // A fold that lands after the capture: block 4 is both in the window and in the entry.
         harness
