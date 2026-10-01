@@ -168,7 +168,7 @@ impl StateService {
     ///
     /// Paginates `contract_ids` the way the database path does (slice, then page) and reports
     /// `total` as the number of requested ids. An address the cache does not hold is built from its
-    /// window deltas, like the database path does.
+    /// deltas in this extractor's window. The database path scans every window instead.
     ///
     /// # Errors
     ///
@@ -282,8 +282,9 @@ impl StateService {
     ///
     /// Same shape as [`Self::contract_state`]. Components are looked up under
     /// `request.protocol_system`, the key folds use. An id the cache does not hold is served as an
-    /// empty state with its window changes applied, like the database path does, so no id fails
-    /// the request. Deleted attributes stay deleted. With
+    /// empty state with its window changes applied, so no id fails the request. The database path
+    /// does the same only at an uncommitted version; at a committed version it leaves the id out.
+    /// Deleted attributes stay deleted. With
     /// `include_balances == false` the balances are removed from the response, like the
     /// database path.
     ///
@@ -345,8 +346,9 @@ impl StateService {
         // database path's merge.
         let mut states = Vec::with_capacity(page.len());
         for (id, entry) in page.iter().zip(entries) {
-            // Not cached: start from an empty state, as the database path does for an id it does
-            // not hold. An id the window never changed is served as that empty state.
+            // Not cached: start from an empty state. An id the window never changed is served as
+            // that empty state. The database path does this only at an uncommitted version; at a
+            // committed version it leaves the id out.
             // TODO: serve unknown ids the same way for accounts and components: both as an empty
             // entity or both as an error.
             let updated_at = entry
