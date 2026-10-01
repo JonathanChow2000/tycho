@@ -719,6 +719,25 @@ mod test {
         assert!(matches!(result, Err(StateServiceError::Fallback(FallbackReason::BelowWindow))));
     }
 
+    #[rstest]
+    #[case::empty_window(
+        Harness::new(2),
+        dto::VersionParam::default(),
+        FallbackReason::EmptyWindow
+    )]
+    #[case::unknown_hash(accounts(), at_hash(9), FallbackReason::UnknownHash)]
+    fn contract_state_falls_back_when_the_window_cannot_resolve_the_version(
+        #[case] harness: Harness,
+        #[case] version: dto::VersionParam,
+        #[case] reason: FallbackReason,
+    ) {
+        let result = harness
+            .service
+            .contract_state(&contract_request(vec![addr(1)], version));
+
+        assert!(matches!(result, Err(StateServiceError::Fallback(r)) if r == reason), "{result:?}");
+    }
+
     #[test]
     fn contract_state_above_the_tip_is_a_version_above_the_tip() {
         let harness = accounts();
