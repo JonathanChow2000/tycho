@@ -1,3 +1,11 @@
+## [0.433.0](https://github.com/propeller-heads/tycho/compare/0.432.0...0.433.0) (2026-10-01)
+
+
+### Features
+
+* **execution:** deploy TychoRouterV3 to Arc ([0a4f1c0](https://github.com/propeller-heads/tycho/commit/0a4f1c0e2ef040f79c2f75182e5d44a94e751495))
+* **execution:** deploy TychoRouterV3 to Arc ([#1507](https://github.com/propeller-heads/tycho/issues/1507)) ([acd68ee](https://github.com/propeller-heads/tycho/commit/acd68eef6ffdaf244761e0ddc7f3f705c0cdd9bc))
+
 ## [0.432.0](https://github.com/propeller-heads/tycho/compare/0.431.0...0.432.0) (2026-10-01)
 
 
