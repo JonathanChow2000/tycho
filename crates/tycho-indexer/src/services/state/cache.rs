@@ -700,6 +700,7 @@ mod test {
 
     use async_trait::async_trait;
     use chrono::NaiveDateTime;
+    use rstest::rstest;
     use tycho_common::models::protocol::ProtocolComponent;
 
     use super::*;
@@ -1035,6 +1036,26 @@ mod test {
 
         assert_eq!(cached.native_balance().value(), &Bytes::from(20u64));
         assert_eq!(cached.native_balance().written_at(), at(6));
+    }
+
+    #[rstest]
+    #[case::slot(|ts: &mut AccountWriteTimestamps| {
+        *ts.slots.values_mut().next().unwrap() = at(9)
+    })]
+    #[case::token_balance(|ts: &mut AccountWriteTimestamps| {
+        *ts.token_balances.values_mut().next().unwrap() = at(9)
+    })]
+    fn account_updated_at_from_a_snapshot_is_its_newest_value(
+        #[case] make_newest: fn(&mut AccountWriteTimestamps),
+    ) {
+        let address = addr(1);
+        // The native balance and the code stay older than the value made newest.
+        let mut timestamps = AccountWriteTimestamps::uniform(&account(&address), at(5));
+        make_newest(&mut timestamps);
+
+        let cached = CachedAccount::from_snapshot(account(&address), timestamps);
+
+        assert_eq!(cached.updated_at(), at(9));
     }
 
     #[test]
