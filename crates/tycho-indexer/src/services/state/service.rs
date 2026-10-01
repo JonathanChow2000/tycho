@@ -179,9 +179,11 @@ impl StateService {
                 .map_or(&[][..], Vec::as_slice);
             let (mut entry, changes) = match entry {
                 Some(entry) => (entry, changes),
-                // Not cached: build the account from its first delta in the window and apply the
-                // rest, as the database path does for an address it does not hold. An address with
-                // no delta fails the whole request, as it does on the database path.
+                // Not cached: build the account from its first delta in this extractor's window
+                // and apply the rest. Other extractors' windows are not read: each extractor
+                // serves its own state, so one extractor's delay or removal cannot change
+                // another's answers. An address with no delta here fails the whole request. The
+                // database path scans every window instead.
                 // TODO: serve unknown ids the same way for accounts and components: both as an
                 // empty entity or both as an error.
                 None => {
