@@ -90,6 +90,9 @@ pub(crate) enum FallbackReason {
     EntryNewer,
     /// The request has no ids, so it lists every entity.
     NoIds,
+    /// No extractor in this process indexes the requested protocol system: the request names
+    /// none, a stopped extractor or an unknown one.
+    UnknownSystem,
 }
 
 impl FallbackReason {
@@ -99,6 +102,7 @@ impl FallbackReason {
             Self::BelowWindow => "below_window",
             Self::EntryNewer => "entry_newer",
             Self::NoIds => "no_ids",
+            Self::UnknownSystem => "unknown_system",
         }
     }
 }
@@ -138,14 +142,13 @@ impl StateService {
     ///
     /// # Errors
     ///
-    /// [`StateServiceError::Fallback`] when the cache cannot rebuild the version or the request
-    /// has no `contract_ids`. Otherwise
+    /// [`StateServiceError::Fallback`] when the cache cannot rebuild the version, the request has
+    /// no `contract_ids`, or no window exists for `protocol_system`. Otherwise
     /// [`StateServiceError::Rpc`] with:
     ///
     /// - `RpcError::Storage(StorageError::NotFound("Contract", ..))` when an address is neither
     ///   cached nor changed by a delta in the window.
-    /// - `RpcError::Parse` (400) when the version is malformed, or `protocol_system` is empty or
-    ///   has no window. Today this silently reads the database.
+    /// - `RpcError::Parse` (400) when the version is malformed.
     /// - `RpcError::DeltasError` (500) when the window cannot be read or a change cannot be merged,
     ///   as on the database path.
     /// - `RpcError::Storage(StorageError::NotFound("Version", ..))` when the version is a block
@@ -360,12 +363,9 @@ impl StateService {
         version: &dto::VersionParam,
         read: impl FnOnce(&DeltaWindow, u64) -> Result<T, StorageError>,
     ) -> Result<(WriteTimestamp, T), StateServiceError> {
-        let window = self
-            .windows
-            .get(protocol_system)
-            .ok_or_else(|| {
-                RpcError::Parse(format!("Unknown protocol system `{protocol_system}`"))
-            })?;
+        let Some(window) = self.windows.get(protocol_system) else {
+            return Err(StateServiceError::Fallback(FallbackReason::UnknownSystem));
+        };
         let version = BlockOrTimestamp::try_from(version).map_err(RpcError::from)?;
         let window = window.lock().map_err(|err| {
             RpcError::from(PendingDeltasError::LockError(
@@ -717,15 +717,20 @@ mod test {
         assert!(matches!(result, Err(StateServiceError::Fallback(FallbackReason::NoIds))));
     }
 
-    #[test]
-    fn contract_state_rejects_an_unknown_system() {
+    #[rstest]
+    #[case::unknown("unknown")]
+    #[case::empty("")]
+    fn contract_state_with_an_unknown_system_falls_back(#[case] system: &str) {
         let harness = accounts();
         let mut request = contract_request(vec![addr(1)], dto::VersionParam::default());
-        request.protocol_system = "unknown".to_string();
+        request.protocol_system = system.to_string();
 
         let result = harness.service.contract_state(&request);
 
-        assert!(matches!(result, Err(StateServiceError::Rpc(RpcError::Parse(_)))), "{result:?}");
+        assert!(
+            matches!(result, Err(StateServiceError::Fallback(FallbackReason::UnknownSystem))),
+            "{result:?}"
+        );
     }
 
     #[rstest]
