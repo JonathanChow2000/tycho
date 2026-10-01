@@ -187,14 +187,6 @@ impl UniswapV4State {
         })
     }
 
-    /// Runs the hook of every quote and limit from this state under `overrides`.
-    pub fn set_pending_overrides(&mut self, overrides: Arc<PendingOverrides>) {
-        if let Some(hook) = &mut self.hook {
-            hook.set_pending_overrides(Arc::clone(&overrides));
-        }
-        self.pending_overrides = Some(overrides);
-    }
-
     pub fn pending_overrides(&self) -> Option<&PendingOverrides> {
         self.pending_overrides.as_deref()
     }
@@ -500,6 +492,26 @@ impl UniswapV4State {
 
 #[typetag::serde]
 impl ProtocolSim for UniswapV4State {
+    /// Runs the hook of every quote and limit from this state under `overrides`, which must be
+    /// [`PendingOverrides`].
+    fn set_pending_overrides(
+        &mut self,
+        overrides: Arc<dyn Any + Send + Sync>,
+    ) -> Result<(), SimulationError> {
+        let overrides = overrides
+            .downcast::<PendingOverrides>()
+            .map_err(|_| {
+                SimulationError::FatalError(
+                    "Uniswap V4 pending overrides must be `PendingOverrides`".to_string(),
+                )
+            })?;
+        if let Some(hook) = &mut self.hook {
+            hook.set_pending_overrides(Arc::clone(&overrides));
+        }
+        self.pending_overrides = Some(overrides);
+        Ok(())
+    }
+
     // Not possible to implement correctly with the current interface because we need to know the
     // swap direction.
     fn fee(&self) -> f64 {
@@ -1529,7 +1541,8 @@ mod tests {
             .get_amount_out(amount_in.clone(), &token_x(), &token_y())
             .unwrap();
         let mut pool = hooked_pool(&hook);
-        pool.set_pending_overrides(Arc::new(pending_fee_update(&hook, 100_000)));
+        pool.set_pending_overrides(Arc::new(pending_fee_update(&hook, 100_000)))
+            .unwrap();
         let pending = pool
             .get_amount_out(amount_in, &token_x(), &token_y())
             .unwrap();
@@ -1563,7 +1576,8 @@ mod tests {
     fn test_pending_overrides_survive_clone_box() {
         let hook = ConfigurableFeeHook::new();
         let mut pool = hooked_pool(&hook);
-        pool.set_pending_overrides(Arc::new(pending_fee_update(&hook, 1)));
+        pool.set_pending_overrides(Arc::new(pending_fee_update(&hook, 1)))
+            .unwrap();
 
         let cloned = pool.clone_box();
         let cloned = cloned
@@ -1575,11 +1589,25 @@ mod tests {
     }
 
     #[test]
+    fn test_set_pending_overrides_rejects_another_payload_type() {
+        let hook = ConfigurableFeeHook::new();
+        let mut pool = hooked_pool(&hook);
+
+        let result = pool.set_pending_overrides(Arc::new(0u8));
+
+        assert!(matches!(result, Err(SimulationError::FatalError(_))));
+        assert!(pool.pending_overrides().is_none(), "a rejected payload sets nothing");
+        assert!(hook.seen.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn test_pending_overrides_are_not_part_of_equality() {
         let hook = ConfigurableFeeHook::new();
         let confirmed = hooked_pool(&hook);
         let mut pending = hooked_pool(&hook);
-        pending.set_pending_overrides(Arc::new(pending_fee_update(&hook, 1)));
+        pending
+            .set_pending_overrides(Arc::new(pending_fee_update(&hook, 1)))
+            .unwrap();
 
         assert!(confirmed == pending, "PartialEq ignores the overrides");
         assert!(ProtocolSim::eq(&confirmed, &pending), "ProtocolSim::eq ignores the overrides");

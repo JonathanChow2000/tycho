@@ -1,4 +1,5 @@
 use std::{
+    any::Any,
     collections::{hash_map::Entry, HashMap, HashSet},
     future::Future,
     pin::Pin,
@@ -20,7 +21,6 @@ use tycho_common::{
 use {
     mockall::mock,
     num_bigint::BigUint,
-    std::any::Any,
     tycho_common::simulation::{
         errors::{SimulationError, TransitionError},
         protocol_sim::GetAmountOutResult,
@@ -32,7 +32,6 @@ use crate::{
         engine_db::{update_engine, SHARED_TYCHO_DB},
         override_stream::{OverrideSnapshot, StateOverrideProvider},
         protocol::{
-            uniswap_v4::state::UniswapV4State,
             utils::bytes_to_address,
             vm::{constants::ERC20_PROXY_BYTECODE, erc20_token::IMPLEMENTATION_SLOT},
         },
@@ -1144,7 +1143,7 @@ where
                     &mut updated_states,
                     &state_guard,
                     &all_balances,
-                );
+                )?;
             }
         }
 
@@ -1162,18 +1161,22 @@ where
         Ok(Update::new(block_number_or_timestamp, updated_states, HashMap::new()))
     }
 
-    /// Sets the pending block's account deltas as overrides on every Uniswap V4 pool linked to a
-    /// written account.
+    /// Sets the pending block's account deltas as overrides on every pool linked to a written
+    /// account.
     ///
     /// A hooked pool prices from its hook's storage, which only the account deltas carry. An
     /// override for an account a hook never reads is inert.
+    ///
+    /// # Errors
+    /// Fails when a pool rejects the overrides' type, since its quotes would silently run
+    /// against confirmed state.
     fn apply_pending_overrides(
         deltas: &BlockAggregatedChanges,
         current_block: &Option<BlockHeader>,
         updated_states: &mut HashMap<String, Box<dyn ProtocolSim>>,
         state_guard: &RwLockReadGuard<'_, DecoderState>,
         all_balances: &Balances,
-    ) {
+    ) -> Result<(), StreamDecodeError> {
         let mut linked_pools: HashSet<&String> = HashSet::new();
         for account in deltas.account_deltas.keys() {
             if let Some(pools) = state_guard.contracts_map.get(account) {
@@ -1184,7 +1187,7 @@ where
         let block = current_block
             .as_ref()
             .map(|h| BlockEnvOverrides { number: Some(h.number), timestamp: Some(h.timestamp) });
-        let overrides =
+        let overrides: Arc<dyn Any + Send + Sync> =
             Arc::new(PendingOverrides::from_account_deltas(&deltas.account_deltas, block));
         for id in linked_pools {
             // Add pools that are affected by account_deltas, but don't have their own
@@ -1202,16 +1205,15 @@ where
                     continue;
                 }
             }
-            if let Some(state) = updated_states
-                .get_mut(id)
-                .and_then(|s| {
-                    s.as_any_mut()
-                        .downcast_mut::<UniswapV4State>()
-                })
-            {
-                state.set_pending_overrides(Arc::clone(&overrides));
+            if let Some(state) = updated_states.get_mut(id) {
+                state
+                    .set_pending_overrides(Arc::clone(&overrides))
+                    .map_err(|e| {
+                        StreamDecodeError::Fatal(format!("Pending overrides for pool {id}: {e}"))
+                    })?;
             }
         }
+        Ok(())
     }
 
     /// Add current block information (number and timestamp) to a ProtocolStateDelta.
@@ -1810,7 +1812,7 @@ mod tests {
             protocol::ProtocolComponentStateDelta, ChangeType as ModelChangeType,
         };
 
-        use crate::evm::protocol::uniswap_v4::state::UniswapV4Fees;
+        use crate::evm::protocol::uniswap_v4::state::{UniswapV4Fees, UniswapV4State};
 
         let decoder = TychoStreamDecoder::<BlockHeader>::new(Chain::Ethereum);
         let pool_id = "0xhooked".to_string();
