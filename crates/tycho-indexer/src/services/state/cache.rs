@@ -27,9 +27,6 @@
 //! account a reader still holds copies the account first, under the write lock (`Arc::make_mut`),
 //! so that copy happens at most once per fold instead of once per read.
 
-// The read side is consumed by the state service, ENG-6293.
-#![allow(dead_code)]
-
 use std::{
     collections::{hash_map::Entry, HashMap},
     hash::Hash,
@@ -83,10 +80,12 @@ impl<T> Timestamped<T> {
         Self { value, written_at }
     }
 
+    #[cfg(test)]
     pub(crate) fn value(&self) -> &T {
         &self.value
     }
 
+    #[cfg(test)]
     pub(crate) fn written_at(&self) -> WriteTimestamp {
         self.written_at
     }
@@ -295,18 +294,22 @@ impl CachedAccount {
         self.newest_write
     }
 
+    #[cfg(test)]
     pub(crate) fn slots(&self) -> &HashMap<StoreKey, Timestamped<StoreVal>> {
         &self.slots
     }
 
+    #[cfg(test)]
     pub(crate) fn native_balance(&self) -> &Timestamped<Balance> {
         &self.native_balance
     }
 
+    #[cfg(test)]
     pub(crate) fn token_balances(&self) -> &HashMap<Address, Timestamped<AccountBalance>> {
         &self.token_balances
     }
 
+    #[cfg(test)]
     pub(crate) fn code(&self) -> &Timestamped<CachedCode> {
         &self.code
     }
@@ -465,6 +468,7 @@ impl CacheState {
 }
 
 impl EntityCache {
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
         Self {
             state: RwLock::new(CacheState { accounts: HashMap::new(), components: HashMap::new() }),

@@ -392,12 +392,9 @@ impl DeltaWindow {
                 .min(tip.saturating_sub(self.config.depth)),
         )
     }
-}
 
-// TODO: merge impl blocks back together once code is consumed and no longer dead
-#[allow(dead_code)] // consumed by the state service, ENG-6293
-impl DeltaWindow {
     /// The oldest block still held in the window, if any.
+    #[cfg(test)]
     pub(crate) fn floor(&self) -> Option<Block> {
         self.buffer
             .oldest()
@@ -405,6 +402,7 @@ impl DeltaWindow {
     }
 
     /// The newest block held in the window, if any.
+    #[cfg(test)]
     pub(crate) fn tip(&self) -> Option<Block> {
         self.buffer
             .newest()
