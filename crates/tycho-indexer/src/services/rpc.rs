@@ -1600,7 +1600,7 @@ mod tests {
                 AddressStorageLocation, EntryPoint, EntryPointWithTracingParams, RPCTracerParams,
                 TracingParams, TracingResult,
             },
-            contract::Account,
+            contract::{Account, AccountDelta},
             protocol::{ProtocolComponent, ProtocolComponentState},
             token::Token,
             ChangeType,
@@ -1613,7 +1613,14 @@ mod tests {
     };
 
     use super::*;
-    use crate::testing::{evm_contract_slots, MockGateway};
+    use crate::{
+        extractor::models::fixtures,
+        services::state::{
+            cache::EntityCache,
+            window::{new_windows, WindowConfig},
+        },
+        testing::{self, evm_contract_slots, MockGateway},
+    };
 
     const WETH: &str = "C02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
     const USDC: &str = "A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
@@ -1904,6 +1911,143 @@ mod tests {
 
         assert_eq!(state.accounts, vec![account.into()]);
         assert_eq!(state.pagination.total, 1);
+    }
+
+    /// Which path answers a state request, by entity cache mode.
+    #[derive(Clone, Copy, Debug)]
+    enum CacheMode {
+        Serve,
+        Shadow,
+    }
+
+    /// A handler whose state service holds one `ex` window with blocks 5 and 6: account
+    /// `0x..01` and component `c1` are created in block 5. The cache starts empty. Without
+    /// expectations, `gw` panics on any database call.
+    fn state_routing_handler(
+        gw: MockGateway,
+        mode: CacheMode,
+    ) -> RpcHandler<MockGateway, MockEntryPointTracer> {
+        let windows = new_windows(["ex"], WindowConfig::default());
+        let address = Bytes::from(1u64).lpad(20, 0);
+        for n in 5..=6 {
+            let mut block = testing::aggregated_changes("ex", n, n, Some(n));
+            let change = if n == 5 { ChangeType::Creation } else { ChangeType::Update };
+            block.account_deltas.insert(
+                address.clone(),
+                AccountDelta::new(
+                    Chain::Ethereum,
+                    address.clone(),
+                    fixtures::optional_slots([(1, n)]),
+                    Some(Bytes::from(n)),
+                    Some(Bytes::from("0x6000")),
+                    change,
+                ),
+            );
+            let block = testing::with_state_delta(block, "c1", n);
+            windows["ex"]
+                .lock()
+                .unwrap()
+                .insert(&Arc::new(block))
+                .unwrap();
+        }
+        let service = Arc::new(StateService::new(windows, Arc::new(EntityCache::new())));
+        let setup = match mode {
+            CacheMode::Serve => EntityCacheSetup::Serve(service),
+            CacheMode::Shadow => EntityCacheSetup::Shadow(service),
+        };
+        RpcHandler::new(
+            gw,
+            None,
+            MockEntryPointTracer::new(),
+            PlansConfig::default(),
+            vec![],
+            vec![],
+        )
+        .with_state_service(setup)
+    }
+
+    #[rstest]
+    #[case::serve_in_window(CacheMode::Serve, 6, 0)]
+    #[case::serve_below_window(CacheMode::Serve, 1, 1)]
+    #[case::shadow(CacheMode::Shadow, 6, 1)]
+    #[tokio::test]
+    async fn test_get_contract_state_routes_by_cache_mode_and_version(
+        #[case] mode: CacheMode,
+        #[case] block: u64,
+        #[case] db_calls: usize,
+    ) {
+        let mut gw = MockGateway::new();
+        gw.expect_get_contracts()
+            .times(db_calls)
+            .returning(|_, _, _, _, _| {
+                Box::pin(async { Ok(WithTotal { entity: vec![], total: Some(0) }) })
+            });
+        let handler = state_routing_handler(gw, mode);
+
+        let result = handler
+            .get_contract_state_routed(dto::StateRequestBody {
+                contract_ids: Some(vec![Bytes::from(1u64).lpad(20, 0)]),
+                protocol_system: "ex".to_string(),
+                version: dto::VersionParam::at_block(dto::Chain::Ethereum, block),
+                chain: dto::Chain::Ethereum,
+                pagination: dto::PaginationParams::new(0, 100),
+            })
+            .await;
+
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    /// An address the cache cannot build fails in serve mode, and the database is not asked.
+    #[tokio::test]
+    async fn test_get_contract_state_returns_the_service_error_in_serve_mode() {
+        let handler = state_routing_handler(MockGateway::new(), CacheMode::Serve);
+
+        let result = handler
+            .get_contract_state_routed(dto::StateRequestBody {
+                contract_ids: Some(vec![Bytes::from(2u64).lpad(20, 0)]),
+                protocol_system: "ex".to_string(),
+                version: dto::VersionParam::at_block(dto::Chain::Ethereum, 6),
+                chain: dto::Chain::Ethereum,
+                pagination: dto::PaginationParams::new(0, 100),
+            })
+            .await;
+
+        assert!(
+            matches!(result, Err(RpcError::Storage(StorageError::NotFound(ref kind, _))) if kind == "Contract"),
+            "{result:?}"
+        );
+    }
+
+    #[rstest]
+    #[case::serve_in_window(CacheMode::Serve, 6, 0)]
+    #[case::serve_below_window(CacheMode::Serve, 1, 1)]
+    #[case::shadow(CacheMode::Shadow, 6, 1)]
+    #[tokio::test]
+    async fn test_get_protocol_state_routes_by_cache_mode_and_version(
+        #[case] mode: CacheMode,
+        #[case] block: u64,
+        #[case] db_calls: usize,
+    ) {
+        let mut gw = MockGateway::new();
+        gw.expect_get_protocol_states()
+            .times(db_calls)
+            .returning(|_, _, _, _, _, _| {
+                Box::pin(async { Ok(WithTotal { entity: vec![], total: Some(0) }) })
+            });
+        let handler = state_routing_handler(gw, mode);
+
+        let result = handler
+            .get_protocol_state_routed(dto::ProtocolStateRequestBody {
+                protocol_ids: Some(vec!["c1".to_string()]),
+                protocol_system: "ex".to_string(),
+                chain: dto::Chain::Ethereum,
+                include_balances: true,
+                version: dto::VersionParam::at_block(dto::Chain::Ethereum, block),
+                pagination: dto::PaginationParams::new(0, 100),
+            })
+            .await;
+
+        assert!(result.is_ok(), "{result:?}");
     }
 
     /// The requested address list is sliced to the page before the db call, so the db must not
