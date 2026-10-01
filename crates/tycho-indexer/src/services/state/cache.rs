@@ -235,8 +235,9 @@ impl CachedAccount {
     }
 
     /// Applies one block's changes. Each value takes `at`; a value already written by that block
-    /// or a newer one is left alone, so the rule lives in [`Timestamped::write`] rather than here —
-    /// there is no entry-level timestamp to compare. A deleted slot becomes the zero value, as in
+    /// or a newer one is left alone, so the rule lives in [`Timestamped::write`] rather than here:
+    /// values of one account can have different timestamps, so the entry's `updated_at` cannot
+    /// decide for each of them. A deleted slot becomes the zero value, as in
     /// [`Account::apply_delta`]. A delta that carries code replaces the code and its hash together.
     /// [`WriteOutcome::Conflict`]s are counted and logged once here, where the address is known.
     pub(crate) fn apply_block(

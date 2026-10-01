@@ -105,8 +105,7 @@ pub(crate) fn new_windows<'a>(
         .collect()
 }
 
-/// Drops every folded block.
-// Placeholder until ENG-6305 wires the entity cache in as the real sink.
+/// Drops every folded block: the sink for `ENTITY_CACHE_MODE=off`, which keeps no cache.
 pub(crate) struct DiscardSink;
 
 impl FoldSink for DiscardSink {
@@ -133,7 +132,7 @@ pub(crate) enum WindowResolution {
 /// One block's changes to a component, as captured from the window.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ComponentChange {
-    /// The block the change belongs to.
+    /// Write timestamp of the block the change belongs to.
     pub at: WriteTimestamp,
     /// State delta of the block, if the block changed the component's state.
     pub delta: Option<ProtocolComponentStateDelta>,
@@ -144,7 +143,7 @@ pub(crate) struct ComponentChange {
 /// One block's changes to an account, as captured from the window.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct AccountChange {
-    /// The block the change belongs to.
+    /// Write timestamp of the block the change belongs to.
     pub at: WriteTimestamp,
     /// Account delta of the block, if the block changed the account.
     pub delta: Option<AccountDelta>,

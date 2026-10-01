@@ -102,7 +102,7 @@ pub trait PendingDeltasBuffer {
 
 impl PendingDeltas {
     /// Windows at the default depth, folding into a `DiscardSink`.
-    // The facade's former constructor, kept only so the tests below stay short.
+    // Test-only shorthand for `from_windows`.
     // TODO: remove it with the rest of `PendingDeltas` once `DeltaWindow` takes over its jobs.
     #[cfg(test)]
     pub fn new<'a>(extractors: impl IntoIterator<Item = &'a str>) -> Self {

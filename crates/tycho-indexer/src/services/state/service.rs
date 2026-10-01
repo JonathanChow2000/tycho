@@ -2,7 +2,7 @@
 //!
 //! A response is `cached entry ⊕ window changes up to the requested version`. The service never
 //! reads the database. A request it cannot serve fails with [`StateServiceError::Fallback`],
-//! and the RPC handler answers it with today's code, which stays untouched: it is both the
+//! and the RPC handler answers it with the database path, which stays untouched: it is both the
 //! fallback and the instant rollback (`ENTITY_CACHE_MODE=off`).
 //!
 //! # Read order
@@ -24,7 +24,7 @@
 //! a value it holds. The version is then below the window, or it was inside the window and a
 //! value is newer anyway: a fold landed after the version was resolved (which also moves the
 //! version below the window), or another extractor that shares the entity is ahead of this one.
-//! Today's handler answers every such version: from the versioned query when the database holds
+//! The database path answers every such version: from the versioned query when the database holds
 //! it, otherwise as `latest from the DB ⊕ uncommitted window changes`.
 
 use std::{
