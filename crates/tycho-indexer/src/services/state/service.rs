@@ -33,7 +33,7 @@ use std::{
 };
 
 use thiserror::Error;
-use tracing::error;
+use tracing::debug;
 use tycho_common::{
     dto::{self, PaginationResponse},
     models::{contract::Account, protocol::ProtocolComponentState, MergeError, PaginationParams},
@@ -318,11 +318,12 @@ impl StateService {
             let cache = self.cache.read();
             for id in &page {
                 let entry = cache.component(system, id);
-                // One extractor owns each component, so the entry can pass `version` only if this
-                // window's own fold lands between the capture and this read with `version` at the
-                // window floor. Not expected: log it and let the database path answer.
+                // One extractor writes each component, and a fold evicts what it folds under the
+                // window lock, so the entry can pass `version` only when a fold lands between the
+                // window read and this read, with `version` near the window floor. The database
+                // path answers it.
                 if let Some(entry) = entry.filter(|entry| entry.updated_at() > version) {
-                    error!(
+                    debug!(
                         component = %id,
                         entry = entry.updated_at().block_number(),
                         version = version.block_number(),
