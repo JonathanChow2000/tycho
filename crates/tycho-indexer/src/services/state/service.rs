@@ -559,13 +559,19 @@ mod test {
         m
     }
 
-    /// Account `addr(1)` created in block 1, slot 1 set to `n` in each block `n` up to 5. With
-    /// depth 2 the cache holds blocks 1-3 and the window blocks 4-5.
+    /// Account `addr(1)` created in block 1, slot 1 and its balance of token `addr(9)` set to `n`
+    /// in each block `n` up to 5. With depth 2 the cache holds blocks 1-3 and the window blocks
+    /// 4-5.
     fn accounts() -> Harness {
         let harness = Harness::new(2);
-        harness.push(with_account(msg(1), account_delta(&addr(1), 1, ChangeType::Creation)));
-        for n in 2..=5 {
-            harness.push(with_account(msg(n), account_delta(&addr(1), n, ChangeType::Update)));
+        for n in 1..=5 {
+            let change = if n == 1 { ChangeType::Creation } else { ChangeType::Update };
+            harness.push(with_account_balance(
+                with_account(msg(n), account_delta(&addr(1), n, change)),
+                &addr(1),
+                &addr(9),
+                n,
+            ));
         }
         harness
     }
@@ -652,6 +658,7 @@ mod test {
 
         assert_eq!(response.accounts.len(), 1);
         assert_eq!(response.accounts[0].slots[&word(1)], word(expected));
+        assert_eq!(response.accounts[0].token_balances[&addr(9)], Bytes::from(expected));
     }
 
     #[test]
