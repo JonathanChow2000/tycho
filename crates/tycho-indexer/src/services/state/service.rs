@@ -872,6 +872,53 @@ mod test {
         );
     }
 
+    #[test]
+    fn protocol_state_paginates_the_requested_ids() {
+        let harness = components();
+        let mut request = protocol_request(&["c2", "c1"], dto::VersionParam::default());
+        request.pagination = dto::PaginationParams::new(1, 1);
+
+        let response = harness
+            .service
+            .protocol_state(&request)
+            .unwrap();
+
+        let served: Vec<&str> = response
+            .states
+            .iter()
+            .map(|state| state.component_id.as_str())
+            .collect();
+        assert_eq!(served, vec!["c1"]);
+        assert_eq!(response.pagination, PaginationResponse::new(1, 1, 2));
+    }
+
+    #[test]
+    fn protocol_state_without_ids_falls_back() {
+        let harness = components();
+        let mut request = protocol_request(&[], dto::VersionParam::default());
+        request.protocol_ids = None;
+
+        let result = harness.service.protocol_state(&request);
+
+        assert!(matches!(result, Err(StateServiceError::Fallback(FallbackReason::NoIds))));
+    }
+
+    #[rstest]
+    #[case::unknown("unknown")]
+    #[case::empty("")]
+    fn protocol_state_with_an_unknown_system_falls_back(#[case] system: &str) {
+        let harness = components();
+        let mut request = protocol_request(&["c1"], dto::VersionParam::default());
+        request.protocol_system = system.to_string();
+
+        let result = harness.service.protocol_state(&request);
+
+        assert!(
+            matches!(result, Err(StateServiceError::Fallback(FallbackReason::UnknownSystem))),
+            "{result:?}"
+        );
+    }
+
     #[rstest]
     #[case::number_in_window(at_block(4), 4)]
     #[case::default_is_the_tip(dto::VersionParam::default(), 5)]
@@ -930,7 +977,7 @@ mod test {
     }
 
     #[test]
-    fn protocol_state_serves_uncached_ids_like_the_database_path() {
+    fn protocol_state_serves_uncached_ids_as_empty_states() {
         let harness = components();
         harness.push(testing::with_state_delta(
             testing::with_state_delta(with_component(msg(6), "c2"), "c2", 6),
