@@ -1,7 +1,7 @@
 //! Serves `/contract_state` and `/protocol_state` from the entity cache.
 //!
 //! A response is `cached entry ⊕ window changes up to the requested version`. The service never
-//! reads the database. A request it cannot serve fails with [`StateServiceError::VersionTooOld`],
+//! reads the database. A request it cannot serve fails with [`StateServiceError::Fallback`],
 //! and the RPC handler answers it with today's code, which stays untouched: it is both the
 //! fallback and the instant rollback (`ENTITY_CACHE_MODE=off`).
 //!
@@ -15,8 +15,8 @@
 //! lost. Accounts check the timestamp of each value, because several extractors can write one
 //! account. Components check one timestamp for the whole entry, because one extractor writes each
 //! component, in order.
-//! A fold can also carry an entry past the requested version; the request then fails with
-//! [`StateServiceError::VersionTooOld`].
+//! A fold can also carry an entry past the requested version; the request then falls back with
+//! [`FallbackReason::EntryNewer`].
 //!
 //! # Versions the cache cannot rebuild
 //!
@@ -80,13 +80,33 @@ impl<T> EntityCacheSetup<T> {
     }
 }
 
+/// Why the cache handed a request to the database path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FallbackReason {
+    /// The version is below the window.
+    BelowWindow,
+    /// A cached entry is newer than the version: a fold landed during the read, or another
+    /// extractor that shares the account is ahead of this one.
+    EntryNewer,
+}
+
+impl FallbackReason {
+    /// Label for the `db_path_requests` metric.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::BelowWindow => "below_window",
+            Self::EntryNewer => "entry_newer",
+        }
+    }
+}
+
 /// Why the state service did not answer a request.
 #[derive(Debug, Error)]
 pub(crate) enum StateServiceError {
-    /// The cache cannot rebuild the requested version; the database path answers it instead.
-    /// See the module doc for when this happens.
-    #[error("Requested version is older than the entity cache")]
-    VersionTooOld,
+    /// The cache cannot answer this request; the database path answers it instead. See the
+    /// module doc for when this happens.
+    #[error("Entity cache fallback: {0:?}")]
+    Fallback(FallbackReason),
     /// The request is invalid; the client gets this error.
     #[error(transparent)]
     Rpc(#[from] RpcError),
@@ -115,7 +135,7 @@ impl StateService {
     ///
     /// # Errors
     ///
-    /// [`StateServiceError::VersionTooOld`] when the cache cannot rebuild the version. Otherwise
+    /// [`StateServiceError::Fallback`] when the cache cannot rebuild the version. Otherwise
     /// [`StateServiceError::Rpc`] with:
     ///
     /// - `RpcError::Parse` (400) when `contract_ids` is `None`: the cache serves explicit ids only,
@@ -163,7 +183,7 @@ impl StateService {
                 // rule this out: a fold can land between the capture and this read, and another
                 // extractor that shares the account folds blocks this window has not reached.
                 if entry.is_some_and(|entry| entry.newest_write() > version) {
-                    return Err(StateServiceError::VersionTooOld);
+                    return Err(StateServiceError::Fallback(FallbackReason::EntryNewer));
                 }
                 entries.push(entry.cloned());
             }
@@ -276,7 +296,7 @@ impl StateService {
                         version = version.block_number(),
                         "Cached component is newer than the requested version"
                     );
-                    return Err(StateServiceError::VersionTooOld);
+                    return Err(StateServiceError::Fallback(FallbackReason::EntryNewer));
                 }
                 entries.push(entry.cloned());
             }
@@ -353,7 +373,9 @@ impl StateService {
         })?;
         let block = match window.resolve(&version) {
             WindowResolution::InWindow(block) => block,
-            WindowResolution::BelowFloor => return Err(StateServiceError::VersionTooOld),
+            WindowResolution::BelowFloor => {
+                return Err(StateServiceError::Fallback(FallbackReason::BelowWindow))
+            }
             WindowResolution::AboveTip => {
                 return Err(RpcError::Storage(StorageError::NotFound(
                     "Version".to_string(),
@@ -579,14 +601,14 @@ mod test {
     }
 
     #[test]
-    fn contract_state_below_the_window_is_too_old() {
+    fn contract_state_below_the_window_falls_back() {
         let harness = accounts();
 
         let result = harness
             .service
             .contract_state(&contract_request(vec![addr(1)], at_block(3)));
 
-        assert!(matches!(result, Err(StateServiceError::VersionTooOld)));
+        assert!(matches!(result, Err(StateServiceError::Fallback(FallbackReason::BelowWindow))));
     }
 
     #[test]
@@ -608,7 +630,7 @@ mod test {
     }
 
     #[test]
-    fn contract_state_is_too_old_when_a_cached_value_is_newer_than_the_version() {
+    fn contract_state_falls_back_when_a_cached_value_is_newer_than_the_version() {
         let harness = accounts();
         // Another extractor that shares the account folds a block past this window's tip.
         harness
@@ -623,7 +645,7 @@ mod test {
             .service
             .contract_state(&contract_request(vec![addr(1)], dto::VersionParam::default()));
 
-        assert!(matches!(result, Err(StateServiceError::VersionTooOld)));
+        assert!(matches!(result, Err(StateServiceError::Fallback(FallbackReason::EntryNewer))));
     }
 
     #[test]
@@ -802,7 +824,7 @@ mod test {
     }
 
     #[test]
-    fn protocol_state_is_too_old_when_the_cached_entry_is_newer_than_the_version() {
+    fn protocol_state_falls_back_when_the_cached_entry_is_newer_than_the_version() {
         let harness = components();
         harness
             .cache
@@ -813,17 +835,17 @@ mod test {
             .service
             .protocol_state(&protocol_request(&["c1"], dto::VersionParam::default()));
 
-        assert!(matches!(result, Err(StateServiceError::VersionTooOld)));
+        assert!(matches!(result, Err(StateServiceError::Fallback(FallbackReason::EntryNewer))));
     }
 
     #[test]
-    fn protocol_state_below_the_window_is_too_old() {
+    fn protocol_state_below_the_window_falls_back() {
         let harness = components();
 
         let result = harness
             .service
             .protocol_state(&protocol_request(&["c1"], at_block(3)));
 
-        assert!(matches!(result, Err(StateServiceError::VersionTooOld)));
+        assert!(matches!(result, Err(StateServiceError::Fallback(FallbackReason::BelowWindow))));
     }
 }

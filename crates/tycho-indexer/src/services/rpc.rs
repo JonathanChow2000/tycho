@@ -33,7 +33,7 @@ use crate::{
         middleware::{
             PlanRestrictions, PlansConfig, RequestPaginationValidation, ValidateRestrictions,
         },
-        state::service::{EntityCacheSetup, StateService, StateServiceError},
+        state::service::{EntityCacheSetup, FallbackReason, StateService, StateServiceError},
     },
 };
 
@@ -288,7 +288,7 @@ where
         {
             match service.contract_state(&request) {
                 Ok(response) => return Ok(response),
-                Err(StateServiceError::VersionTooOld) => count_db_path("contract_state"),
+                Err(StateServiceError::Fallback(reason)) => count_db_path("contract_state", reason),
                 Err(StateServiceError::Rpc(err)) => return Err(err),
             }
         }
@@ -533,7 +533,7 @@ where
         {
             match service.protocol_state(&request) {
                 Ok(response) => return Ok(response),
-                Err(StateServiceError::VersionTooOld) => count_db_path("protocol_state"),
+                Err(StateServiceError::Fallback(reason)) => count_db_path("protocol_state", reason),
                 Err(StateServiceError::Rpc(err)) => return Err(err),
             }
         }
@@ -1190,8 +1190,9 @@ where
 }
 
 /// Counts a state request the entity cache handed to the database path.
-fn count_db_path(endpoint: &'static str) {
-    metrics::counter!("db_path_requests", "endpoint" => endpoint).increment(1);
+fn count_db_path(endpoint: &'static str, reason: FallbackReason) {
+    metrics::counter!("db_path_requests", "endpoint" => endpoint, "reason" => reason.as_str())
+        .increment(1);
 }
 
 /// Retrieve contract states
