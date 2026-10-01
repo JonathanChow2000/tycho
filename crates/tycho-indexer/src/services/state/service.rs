@@ -28,7 +28,7 @@
 //! it, otherwise as `latest from the DB ⊕ uncommitted window changes`.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
 };
 
@@ -188,12 +188,15 @@ impl StateService {
         let Some(ids) = request.contract_ids.as_deref() else {
             return Err(StateServiceError::Fallback(FallbackReason::NoIds));
         };
-        // Slice the page out of the requested ids, like the database path does.
+        // Slice the page out of the requested ids and keep each id once, like the database path
+        // does. `total` still counts every requested id.
         let pagination = PaginationParams::from(&request.pagination);
+        let mut seen = HashSet::new();
         let page: Vec<Bytes> = ids
             .iter()
             .skip(pagination.offset() as usize)
             .take(pagination.page_size as usize)
+            .filter(|id| seen.insert(*id))
             .cloned()
             .collect();
         // Resolve the version and copy the window changes for the page under one window lock, so
@@ -296,13 +299,16 @@ impl StateService {
         let Some(ids) = request.protocol_ids.as_deref() else {
             return Err(StateServiceError::Fallback(FallbackReason::NoIds));
         };
-        // Slice the page out of the requested ids, like the database path does.
+        // Slice the page out of the requested ids and keep each id once, like the database path
+        // does. `total` still counts every requested id.
         let pagination = PaginationParams::from(&request.pagination);
+        let mut seen = HashSet::new();
         let page: Vec<&str> = ids
             .iter()
             .skip(pagination.offset() as usize)
             .take(pagination.page_size as usize)
             .map(String::as_str)
+            .filter(|id| seen.insert(*id))
             .collect();
         let system = &request.protocol_system;
         // Resolve the version and copy the window changes for the page under one window lock, so
@@ -785,6 +791,32 @@ mod test {
 
         assert_eq!(served_addresses(&response), vec![addr(1)]);
         assert_eq!(response.pagination, PaginationResponse::new(1, 1, 2));
+    }
+
+    #[test]
+    fn contract_state_serves_a_repeated_id_once() {
+        let harness = accounts();
+
+        let response = harness
+            .service
+            .contract_state(&contract_request(vec![addr(1), addr(1)], dto::VersionParam::default()))
+            .unwrap();
+
+        assert_eq!(served_addresses(&response), vec![addr(1)]);
+        assert_eq!(response.pagination, PaginationResponse::new(0, 100, 2));
+    }
+
+    #[test]
+    fn protocol_state_serves_a_repeated_id_once() {
+        let harness = components();
+
+        let response = harness
+            .service
+            .protocol_state(&protocol_request(&["c1", "c1"], dto::VersionParam::default()))
+            .unwrap();
+
+        assert_eq!(response.states.len(), 1);
+        assert_eq!(response.pagination, PaginationResponse::new(0, 100, 2));
     }
 
     #[test]
