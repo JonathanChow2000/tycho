@@ -493,6 +493,10 @@ impl DeltaWindow {
     }
 }
 
+// `component_changes` and `account_changes` are kept parallel on purpose: one generic over the key,
+// delta and balance types is harder to read than the two bodies. Every `changes_*` test runs both
+// on the same blocks, so a fix to one that misses the other fails.
+
 /// Every change in `blocks` to the components `ids`, in block order. Ids with no change are absent.
 pub(crate) fn component_changes(
     blocks: &[Arc<BlockAggregatedChanges>],
