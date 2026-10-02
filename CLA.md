@@ -12,7 +12,7 @@ You accept this Agreement by posting the signing comment requested by the CLA bo
 
 ## 2. Copyright license
 
-You grant PropellerHeads, its Affiliates, and the recipients of software it distributes a perpetual, worldwide, non-exclusive, royalty-free, irrevocable license to reproduce, prepare derivative works of, publicly display, publicly perform, sublicense, and distribute your Contributions and derivative works of them. PropellerHeads may license your Contributions under any terms it chooses, including the PropellerHeads License, the Fynd License, other source-available, open-source, or proprietary licenses, and individually negotiated commercial agreements. **Affiliate** has the meaning given in the PropellerHeads License 1.1.
+You grant PropellerHeads, its Affiliates, and the recipients of software it distributes a perpetual, worldwide, non-exclusive, royalty-free, irrevocable license to reproduce, prepare derivative works of, publicly display, publicly perform, sublicense, and distribute your Contributions and derivative works of them. PropellerHeads may license your Contributions under any terms it chooses, including the Fynd License, other source-available, open-source, or proprietary licenses, and individually negotiated commercial agreements. **Affiliate** has the meaning given in the Fynd License 1.1.
 
 ## 3. Patent license
 

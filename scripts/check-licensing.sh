@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fails if first-party packages drift from the PropellerHeads License 1.1 (see LICENSING.md).
+# Fails if first-party packages drift from the Fynd License 1.1 (see LICENSING.md).
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
@@ -10,7 +10,7 @@ fail() {
     errors=$((errors + 1))
 }
 
-expected_title="# PropellerHeads License 1.1"
+expected_title="# Fynd License 1.1"
 if [[ "$(head -n 1 LICENSE.md)" != "$expected_title" ]]; then
     fail "LICENSE.md must start with '$expected_title'"
 fi
@@ -41,7 +41,7 @@ done
 busl_pattern='SPDX-License-Identifier: BUSL-1.1'
 if git grep -q "$busl_pattern" -- ':!scripts/check-licensing.sh'; then
     git grep -l "$busl_pattern" -- ':!scripts/check-licensing.sh' >&2
-    fail "files above still carry BUSL-1.1; use LicenseRef-PropellerHeads-1.1"
+    fail "files above still carry BUSL-1.1; use LicenseRef-Fynd-License-1.1"
 fi
 
 if grep -q 'MIT' crates/tycho-client-py/pyproject.toml; then
