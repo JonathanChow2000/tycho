@@ -1,3 +1,81 @@
+## [0.435.1](https://github.com/propeller-heads/tycho/compare/0.435.0...0.435.1) (2026-10-02)
+
+
+### Bug Fixes
+
+* **simulation:** point the Bebop pAMM at its live router ([36013e2](https://github.com/propeller-heads/tycho/commit/36013e258cb2e1708857f0cde0f851d11baa6a43))
+* **simulation:** point the Bebop pAMM at its live router ([#1531](https://github.com/propeller-heads/tycho/issues/1531)) ([44d3644](https://github.com/propeller-heads/tycho/commit/44d36442323c3d2b39583e477d82b7ef3d3c248f))
+
+## [0.435.0](https://github.com/propeller-heads/tycho/compare/0.434.0...0.435.0) (2026-10-02)
+
+
+### Features
+
+* license Tycho under the Fynd License 1.1 ([#1529](https://github.com/propeller-heads/tycho/issues/1529)) ([bd068c7](https://github.com/propeller-heads/tycho/commit/bd068c77571cddf6694e5161a52158a6498e183b))
+* license Tycho under the PropellerHeads License 1.1 ([ef830f3](https://github.com/propeller-heads/tycho/commit/ef830f310f9bca3984a532129c7d14e0c55f4c84))
+
+
+### Bug Fixes
+
+* exclude the licensing check script from its own BUSL search ([a6f00a1](https://github.com/propeller-heads/tycho/commit/a6f00a18b7683689b49c6740aba3fdb23b6e17af))
+
+## [0.434.0](https://github.com/propeller-heads/tycho/compare/0.433.1...0.434.0) (2026-10-02)
+
+
+### Features
+
+* **indexer:** add the StateService interfaces ([f952079](https://github.com/propeller-heads/tycho/commit/f9520799df8c7010389da168ff3ffdcbadbab7da))
+* **indexer:** capture window changes per entity type ([0753ac3](https://github.com/propeller-heads/tycho/commit/0753ac3fc69bacc3e270cace64917141d929079d))
+* **indexer:** name every state cache fallback and register its series ([0a429b8](https://github.com/propeller-heads/tycho/commit/0a429b858854b4fb09b64a6782af0f82e8aea2da))
+* **indexer:** resolve every request version in DeltaWindow::resolve ([554e109](https://github.com/propeller-heads/tycho/commit/554e109cd33dfceee2c4bbbf33dbe2d7fb8ff2d0))
+* **indexer:** serve contract and protocol state from the entity cache ([#1513](https://github.com/propeller-heads/tycho/issues/1513)) ([06b2f15](https://github.com/propeller-heads/tycho/commit/06b2f15924a0d257d833a80e9916dd906804791f))
+* **indexer:** serve contract_state from the entity cache ([a1270f0](https://github.com/propeller-heads/tycho/commit/a1270f0047ec364cbc750eeac7c7f014859bf195))
+* **indexer:** serve protocol_state from the entity cache ([4b524ad](https://github.com/propeller-heads/tycho/commit/4b524ad1f37aed3cd64abe12f6c669c68abb79ca))
+* **indexer:** track the newest write of a cached account ([e661c64](https://github.com/propeller-heads/tycho/commit/e661c64947c0f689be2c80dccf7f7eadc31db012))
+
+
+### Bug Fixes
+
+* **indexer:** answer a block above the window tip like the database path ([0263f49](https://github.com/propeller-heads/tycho/commit/0263f49dc5bed7c0c52b6d0c0ef08281384bbfbb))
+* **indexer:** fall back to the database for an unknown protocol system ([618a085](https://github.com/propeller-heads/tycho/commit/618a085e690baa7305b55553152b3c730da24b4b))
+* **indexer:** keep the status of a failed component id lookup ([592c710](https://github.com/propeller-heads/tycho/commit/592c7106b55928d677567bc6214bd2a76cfad3da))
+* **indexer:** log a newer cached component at debug ([51e1594](https://github.com/propeller-heads/tycho/commit/51e159459a883037455c5517fc6136091f106a2d))
+* **indexer:** return a 500 when the protocol component id lookup fails ([c637621](https://github.com/propeller-heads/tycho/commit/c637621d603fe6c1440f137ad134deac04b21b10))
+* **indexer:** send state requests without ids to the database path ([2d46423](https://github.com/propeller-heads/tycho/commit/2d464237d1dacdbda3f61fbf08b9627f94dbb0fb))
+* **indexer:** serve each requested state id once per page ([2be9d39](https://github.com/propeller-heads/tycho/commit/2be9d394c19f4eedf148a4ee86dbb4efd35a0239))
+* **indexer:** skip folded blocks when serving component state ([6d5eedf](https://github.com/propeller-heads/tycho/commit/6d5eedfb558ec6ad9b796ca4460e5a633f26befd))
+
+
+### Performance Improvements
+
+* **indexer:** clone state window changes outside the window lock ([1ef6c65](https://github.com/propeller-heads/tycho/commit/1ef6c65815dea68753556b43885f6b6d6db36139))
+* **indexer:** copy only the Arc of cached accounts under the read lock ([89dbd3b](https://github.com/propeller-heads/tycho/commit/89dbd3b938accb8b51ea0f2f0c3f89c0f0b52baf))
+
+## [0.433.1](https://github.com/propeller-heads/tycho/compare/0.433.0...0.433.1) (2026-10-01)
+
+
+### Bug Fixes
+
+* **test:** bump alloy-chains to 0.2.39 for Arc mainnet ([7631fb0](https://github.com/propeller-heads/tycho/commit/7631fb0a8967d1faf956c92f7ae897881b5cab07))
+* **test:** bump alloy-chains to 0.2.39 for Arc mainnet ([#1526](https://github.com/propeller-heads/tycho/issues/1526)) ([afd884c](https://github.com/propeller-heads/tycho/commit/afd884c2775756edcefff1bf088ac89b98773af1))
+
+## [0.433.0](https://github.com/propeller-heads/tycho/compare/0.432.0...0.433.0) (2026-10-01)
+
+
+### Features
+
+* **execution:** deploy TychoRouterV3 to Arc ([0a4f1c0](https://github.com/propeller-heads/tycho/commit/0a4f1c0e2ef040f79c2f75182e5d44a94e751495))
+* **execution:** deploy TychoRouterV3 to Arc ([#1507](https://github.com/propeller-heads/tycho/issues/1507)) ([acd68ee](https://github.com/propeller-heads/tycho/commit/acd68eef6ffdaf244761e0ddc7f3f705c0cdd9bc))
+
+## [0.432.0](https://github.com/propeller-heads/tycho/compare/0.431.0...0.432.0) (2026-10-01)
+
+
+### Features
+
+* **common:** add ProtocolSim::set_pending_overrides ([45eb33a](https://github.com/propeller-heads/tycho/commit/45eb33af74f554c63cf158caabd8fe93d9f2eb70))
+* **simulation:** run uniswap v4 hooks under pending block overrides ([a2141b9](https://github.com/propeller-heads/tycho/commit/a2141b9ee12d9723a35da4f5ae86ed8f1b464494))
+* **simulation:** run uniswap v4 hooks under pending block overrides ([#1506](https://github.com/propeller-heads/tycho/issues/1506)) ([fe94231](https://github.com/propeller-heads/tycho/commit/fe94231c84ca4ae7a3fdf120a204840b655579bf))
+
 ## [0.431.0](https://github.com/propeller-heads/tycho/compare/0.430.2...0.431.0) (2026-09-30)
 
 
