@@ -37,8 +37,10 @@ for manifest in protocols/substreams/crates/tycho-substreams/Cargo.toml \
     fi
 done
 
-if git grep -q 'SPDX-License-Identifier: BUSL-1.1'; then
-    git grep -l 'SPDX-License-Identifier: BUSL-1.1' >&2
+# Exclude this script, which contains the pattern itself.
+busl_pattern='SPDX-License-Identifier: BUSL-1.1'
+if git grep -q "$busl_pattern" -- ':!scripts/check-licensing.sh'; then
+    git grep -l "$busl_pattern" -- ':!scripts/check-licensing.sh' >&2
     fail "files above still carry BUSL-1.1; use LicenseRef-PropellerHeads-1.1"
 fi
 
