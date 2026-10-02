@@ -17,7 +17,7 @@ For a custom license, contact legal@propellerheads.xyz.
 
 ## Earlier releases
 
-Tycho `0.431.x` and earlier were released under the MIT License, and they remain under that license. Router and executor contract source published before this change was released under the Business Source License 1.1 in [propeller-heads/tycho-execution](https://github.com/propeller-heads/tycho-execution), and it remains under that license.
+Tycho releases before `0.500.0` were released under the MIT License, and they remain under that license. Router and executor contract source published before this change was released under the Business Source License 1.1 in [propeller-heads/tycho-execution](https://github.com/propeller-heads/tycho-execution), and it remains under that license.
 
 Parts of this repository were contributed under the MIT License before `0.500.0`. As the MIT License requires, its notice is reproduced here and applies to those portions:
 

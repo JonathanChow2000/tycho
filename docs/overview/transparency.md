@@ -8,7 +8,7 @@ description: Tycho funding and governance.
 
 Tycho's source code is public on <a href="https://github.com/propeller-heads/tycho" target="_blank" rel="noopener noreferrer">GitHub</a>. You can inspect, run, and modify it.
 
-* **Tycho 0.431.x and earlier:** we released these versions under the MIT License, and they stay under it.
+* **Tycho releases before 0.500.0:** we released these versions under the MIT License, and they stay under it.
 * **Tycho 0.500.0 and later:** we release these versions under the <a href="https://github.com/propeller-heads/tycho/blob/main/LICENSE.md" target="_blank" rel="noopener noreferrer">Fynd License 1.1</a>. Settlements that use Tycho must execute through the [Designated Router](../for-solvers/execution/contract-addresses.md). Revenue you earn from settlements or services that use Tycho, including solver rewards, carries a 20% revenue share. Using Tycho internally, offering it for free, or trading with your own capital does not by itself trigger a revenue share.
 
 <a href="https://github.com/propeller-heads/tycho/blob/main/LICENSING.md" target="_blank" rel="noopener noreferrer">LICENSING.md</a> lists which license covers which files. For a custom license, contact legal@propellerheads.xyz.
