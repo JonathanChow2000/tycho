@@ -283,10 +283,9 @@ pub(crate) async fn get_client() -> Result<EVMProvider, EncodingError> {
 /// Records how far a maker's signed RFQ quote lands from the price levels of `protocol_state`.
 ///
 /// Prices `signed_quote.amount_in` on `protocol_state` and emits a debug event with that level
-/// amount next to `signed_quote.amount_out`. The gap also goes to the
-/// `rfq_signed_quote_deviation_bps` histogram, labelled by protocol system. Negative means the
-/// maker signed for less than its levels advertised. If the levels cannot price the signed input,
-/// it logs a warning and records nothing.
+/// amount, `signed_quote.amount_out` and the gap between them in basis points. A negative gap
+/// means the maker signed for less than its levels advertised. If the levels cannot price the
+/// signed input, it logs a warning instead.
 pub(crate) fn record_signed_quote_deviation(
     swap: &Swap,
     protocol_state: &dyn ProtocolSim,
@@ -322,26 +321,18 @@ pub(crate) fn record_signed_quote_deviation(
         deviation_bps,
         "signed RFQ quote against its price levels"
     );
-    if let Some(deviation_bps) = deviation_bps {
-        metrics::histogram!(
-            "rfq_signed_quote_deviation_bps",
-            "protocol" => component.protocol_system.clone()
-        )
-        .record(deviation_bps);
-    }
 }
 
 /// Returns `(signed - level) / level` in whole basis points, truncated toward zero.
 ///
 /// Returns `None` when `level_amount_out` is zero or the result does not fit in an `i64`.
-fn deviation_bps(level_amount_out: &BigUint, signed_amount_out: &BigUint) -> Option<f64> {
+fn deviation_bps(level_amount_out: &BigUint, signed_amount_out: &BigUint) -> Option<i64> {
     if *level_amount_out == BigUint::ZERO {
         return None;
     }
     let level = BigInt::from(level_amount_out.clone());
     let gap = BigInt::from(signed_amount_out.clone()) - &level;
-    let bps = i64::try_from(gap * 10_000 / level).ok()?;
-    Some(bps as f64)
+    i64::try_from(gap * 10_000 / level).ok()
 }
 
 /// Uses prefix-length encoding to efficient encode action data.
@@ -411,72 +402,16 @@ mod tests {
     #[test]
     fn test_deviation_bps() {
         let level = BigUint::from(1_000_000u64);
-        assert_eq!(deviation_bps(&level, &BigUint::from(1_000_000u64)), Some(0.0));
-        assert_eq!(deviation_bps(&level, &BigUint::from(990_000u64)), Some(-100.0));
-        assert_eq!(deviation_bps(&level, &BigUint::from(1_005_000u64)), Some(50.0));
-        assert_eq!(deviation_bps(&level, &BigUint::from(999_950u64)), Some(0.0));
-        assert_eq!(deviation_bps(&level, &BigUint::ZERO), Some(-10_000.0));
+        assert_eq!(deviation_bps(&level, &BigUint::from(1_000_000u64)), Some(0));
+        assert_eq!(deviation_bps(&level, &BigUint::from(990_000u64)), Some(-100));
+        assert_eq!(deviation_bps(&level, &BigUint::from(1_005_000u64)), Some(50));
+        assert_eq!(deviation_bps(&level, &BigUint::from(999_950u64)), Some(0));
+        assert_eq!(deviation_bps(&level, &BigUint::ZERO), Some(-10_000));
     }
 
     #[test]
     fn test_deviation_bps_zero_level() {
         assert_eq!(deviation_bps(&BigUint::ZERO, &BigUint::from(1u64)), None);
-    }
-
-    fn recorded_deviations(level_amount_out: Option<BigUint>) -> Vec<(String, f64)> {
-        use metrics_util::debugging::{DebugValue, DebuggingRecorder};
-        use tycho_common::models::protocol::ProtocolComponent;
-
-        use crate::encoding::{evm::testing_utils::MockRFQState, models::default_token};
-
-        let state = MockRFQState { level_amount_out, ..Default::default() };
-        let swap = Swap::new(
-            ProtocolComponent {
-                id: "hashflow-mm".to_string(),
-                protocol_system: "rfq:hashflow".to_string(),
-                ..Default::default()
-            },
-            default_token(Bytes::from([1u8; 20])),
-            default_token(Bytes::from([2u8; 20])),
-            BigUint::ZERO,
-        );
-        let signed_quote = SignedQuote {
-            base_token: Bytes::from([1u8; 20]),
-            quote_token: Bytes::from([2u8; 20]),
-            amount_in: BigUint::from(1_000u64),
-            amount_out: BigUint::from(990_000u64),
-            quote_attributes: Default::default(),
-        };
-        let recorder = DebuggingRecorder::new();
-        let snapshotter = recorder.snapshotter();
-
-        metrics::with_local_recorder(&recorder, || {
-            record_signed_quote_deviation(&swap, &state, &signed_quote)
-        });
-
-        let mut deviations = Vec::new();
-        for (key, _, _, value) in snapshotter.snapshot().into_vec() {
-            let DebugValue::Histogram(samples) = value else { continue };
-            assert_eq!(key.key().name(), "rfq_signed_quote_deviation_bps");
-            for label in key.key().labels() {
-                for sample in &samples {
-                    deviations.push((label.value().to_string(), sample.into_inner()));
-                }
-            }
-        }
-        deviations
-    }
-
-    #[test]
-    fn test_record_signed_quote_deviation() {
-        let deviations = recorded_deviations(Some(BigUint::from(1_000_000u64)));
-
-        assert_eq!(deviations, vec![("rfq:hashflow".to_string(), -100.0)]);
-    }
-
-    #[test]
-    fn test_record_signed_quote_deviation_unpriced() {
-        assert!(recorded_deviations(None).is_empty());
     }
 
     #[test]

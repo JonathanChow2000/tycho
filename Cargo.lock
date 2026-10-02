@@ -9804,8 +9804,6 @@ dependencies = [
  "clap",
  "dotenvy",
  "hex",
- "metrics",
- "metrics-util 0.20.0",
  "num-bigint",
  "once_cell",
  "reqwest 0.12.23",
