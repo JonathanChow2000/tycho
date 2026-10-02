@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Debug};
+use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use alloy::primitives::{Address, U256};
 use tycho_common::{
@@ -11,12 +11,15 @@ use tycho_common::{
     Bytes,
 };
 
-use crate::evm::protocol::uniswap_v4::{
-    hooks::models::{
-        AfterSwapDelta, AfterSwapParameters, AmountRanges, BeforeSwapOutput, BeforeSwapParameters,
-        SwapParams, WithGasEstimate,
+use crate::evm::{
+    protocol::uniswap_v4::{
+        hooks::models::{
+            AfterSwapDelta, AfterSwapParameters, AmountRanges, BeforeSwapOutput,
+            BeforeSwapParameters, SwapParams, WithGasEstimate,
+        },
+        state::UniswapV4State,
     },
-    state::UniswapV4State,
+    simulation::PendingOverrides,
 };
 
 /// Trait for simulating the swap-related behavior of Uniswap V4 hooks.
@@ -41,6 +44,11 @@ pub trait HookHandler: Debug + Send + Sync + 'static {
         overwrites: Option<HashMap<Address, HashMap<U256, U256>>>,
         transient_storage_params: Option<HashMap<Address, HashMap<U256, U256>>>,
     ) -> Result<WithGasEstimate<AfterSwapDelta>, SimulationError>;
+
+    /// Runs every later call under a pending block's storage, native balances and block
+    /// environment; a caller's own overwrites take precedence slot by slot. Hooks that do not
+    /// simulate a contract ignore it.
+    fn set_pending_overrides(&mut self, _overrides: Arc<PendingOverrides>) {}
 
     // Currently fee is not accessible on v4 pools, this is for future use
     // as soon as we adapt the ProtocolSim interface

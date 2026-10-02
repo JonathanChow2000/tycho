@@ -1,4 +1,4 @@
-use std::{any::Any, collections::HashMap, fmt};
+use std::{any::Any, collections::HashMap, fmt, sync::Arc};
 
 use alloy::primitives::{Address, Sign, I256, U256};
 use num_bigint::BigUint;
@@ -20,33 +20,38 @@ use tycho_common::{
 
 use super::hooks::utils::{has_permission, HookOptions};
 use crate::{
-    evm::protocol::{
-        clmm::clmm_swap_to_price,
-        safe_math::{safe_add_u256, safe_sub_u256},
-        u256_num::{u256_to_biguint, u256_to_f64},
-        uniswap_v4::hooks::{
-            hook_handler::HookHandler,
-            models::{
-                AfterSwapParameters, BalanceDelta, BeforeSwapDelta, BeforeSwapParameters,
-                StateContext, SwapParams,
-            },
-        },
-        utils::{
-            add_fee_markup,
-            uniswap::{
-                i24_be_bytes_to_i32, liquidity_math,
-                lp_fee::{self, is_dynamic},
-                sqrt_price_math::{get_amount0_delta, get_amount1_delta, sqrt_price_q96_to_f64},
-                swap_math,
-                tick_list::{TickInfo, TickList, TickListErrorKind},
-                tick_math::{
-                    get_sqrt_ratio_at_tick, get_tick_at_sqrt_ratio, MAX_SQRT_RATIO, MAX_TICK,
-                    MIN_SQRT_RATIO, MIN_TICK,
+    evm::{
+        protocol::{
+            clmm::clmm_swap_to_price,
+            safe_math::{safe_add_u256, safe_sub_u256},
+            u256_num::{u256_to_biguint, u256_to_f64},
+            uniswap_v4::hooks::{
+                hook_handler::HookHandler,
+                models::{
+                    AfterSwapParameters, BalanceDelta, BeforeSwapDelta, BeforeSwapParameters,
+                    StateContext, SwapParams,
                 },
-                StepComputation, SwapResults, SwapState,
             },
+            utils::{
+                add_fee_markup,
+                uniswap::{
+                    i24_be_bytes_to_i32, liquidity_math,
+                    lp_fee::{self, is_dynamic},
+                    sqrt_price_math::{
+                        get_amount0_delta, get_amount1_delta, sqrt_price_q96_to_f64,
+                    },
+                    swap_math,
+                    tick_list::{TickInfo, TickList, TickListErrorKind},
+                    tick_math::{
+                        get_sqrt_ratio_at_tick, get_tick_at_sqrt_ratio, MAX_SQRT_RATIO, MAX_TICK,
+                        MIN_SQRT_RATIO, MIN_TICK,
+                    },
+                    StepComputation, SwapResults, SwapState,
+                },
+            },
+            vm::constants::EXTERNAL_ACCOUNT,
         },
-        vm::constants::EXTERNAL_ACCOUNT,
+        simulation::PendingOverrides,
     },
     impl_non_serializable_protocol,
 };
@@ -85,6 +90,9 @@ pub struct UniswapV4State {
     ticks: TickList,
     tick_spacing: i32,
     pub hook: Option<Box<dyn HookHandler>>,
+    /// Storage and block environment a pending quote runs the hook under. `None` on confirmed
+    /// state; set only on the clones `apply_deltas_ephemeral` hands out.
+    pending_overrides: Option<Arc<PendingOverrides>>,
 }
 
 impl_non_serializable_protocol!(UniswapV4State, "not supported due vm state deps");
@@ -97,6 +105,7 @@ impl fmt::Debug for UniswapV4State {
             .field("fees", &self.fees)
             .field("tick", &self.tick)
             .field("tick_spacing", &self.tick_spacing)
+            .field("pending_overrides", &self.pending_overrides.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -174,7 +183,12 @@ impl UniswapV4State {
             ticks: tick_list,
             tick_spacing,
             hook: None,
+            pending_overrides: None,
         })
+    }
+
+    pub fn pending_overrides(&self) -> Option<&PendingOverrides> {
+        self.pending_overrides.as_deref()
     }
 
     fn swap(
@@ -478,6 +492,26 @@ impl UniswapV4State {
 
 #[typetag::serde]
 impl ProtocolSim for UniswapV4State {
+    /// Runs the hook of every quote and limit from this state under `overrides`, which must be
+    /// [`PendingOverrides`].
+    fn set_pending_overrides(
+        &mut self,
+        overrides: Arc<dyn Any + Send + Sync>,
+    ) -> Result<(), SimulationError> {
+        let overrides = overrides
+            .downcast::<PendingOverrides>()
+            .map_err(|_| {
+                SimulationError::FatalError(
+                    "Uniswap V4 pending overrides must be `PendingOverrides`".to_string(),
+                )
+            })?;
+        if let Some(hook) = &mut self.hook {
+            hook.set_pending_overrides(Arc::clone(&overrides));
+        }
+        self.pending_overrides = Some(overrides);
+        Ok(())
+    }
+
     // Not possible to implement correctly with the current interface because we need to know the
     // swap direction.
     fn fee(&self) -> f64 {
@@ -1341,6 +1375,244 @@ mod tests {
 
         assert_eq!(&res.1, &out.amount);
     }
+    /// The hook calls a quote made, each with the overrides it ran under.
+    type SeenCalls = Vec<(&'static str, Option<PendingOverrides>)>;
+
+    /// A hook whose beforeSwap fee is whatever the pending block wrote to its slot 0, and
+    /// which records the overrides each call ran under.
+    #[derive(Debug, Clone)]
+    struct ConfigurableFeeHook {
+        address: Address,
+        pending_overrides: Option<Arc<PendingOverrides>>,
+        seen: Arc<std::sync::Mutex<SeenCalls>>,
+    }
+
+    impl ConfigurableFeeHook {
+        /// Low address bits are the permission flags: bit 7 beforeSwap, bit 6 afterSwap.
+        fn new() -> Self {
+            let mut address = [0u8; 20];
+            address[19] = 0xC0;
+            Self {
+                address: Address::from_slice(&address),
+                pending_overrides: None,
+                seen: Arc::default(),
+            }
+        }
+
+        fn pending_fee(&self) -> U256 {
+            self.pending_overrides
+                .as_ref()
+                .and_then(|p| p.storage.as_ref())
+                .and_then(|storage| storage.get(&self.address))
+                .and_then(|slots| slots.get(&U256::ZERO))
+                .copied()
+                .unwrap_or(U256::ZERO)
+        }
+    }
+
+    impl HookHandler for ConfigurableFeeHook {
+        fn address(&self) -> Address {
+            self.address
+        }
+
+        fn before_swap(
+            &self,
+            _params: BeforeSwapParameters,
+            _overwrites: Option<HashMap<Address, HashMap<U256, U256>>>,
+            _transient_storage: Option<HashMap<Address, HashMap<U256, U256>>>,
+        ) -> Result<WithGasEstimate<BeforeSwapOutput>, SimulationError> {
+            self.seen.lock().unwrap().push((
+                "before",
+                self.pending_overrides
+                    .as_deref()
+                    .cloned(),
+            ));
+            Ok(WithGasEstimate {
+                gas_estimate: 0,
+                result: BeforeSwapOutput {
+                    amount_delta: BeforeSwapDelta(I256::ZERO),
+                    fee: U24::from(self.pending_fee()),
+                    overwrites: HashMap::new(),
+                    transient_storage: HashMap::new(),
+                },
+            })
+        }
+
+        fn after_swap(
+            &self,
+            _params: AfterSwapParameters,
+            _overwrites: Option<HashMap<Address, HashMap<U256, U256>>>,
+            _transient_storage_params: Option<HashMap<Address, HashMap<U256, U256>>>,
+        ) -> Result<WithGasEstimate<AfterSwapDelta>, SimulationError> {
+            self.seen.lock().unwrap().push((
+                "after",
+                self.pending_overrides
+                    .as_deref()
+                    .cloned(),
+            ));
+            Ok(WithGasEstimate { gas_estimate: 0, result: I128::ZERO })
+        }
+
+        fn fee(
+            &self,
+            _context: &UniswapV4State,
+            _params: SwapParams,
+        ) -> Result<f64, SimulationError> {
+            Ok(0.0)
+        }
+
+        fn spot_price(&self, _base: &Token, _quote: &Token) -> Result<f64, SimulationError> {
+            Err(SimulationError::RecoverableError("not implemented".into()))
+        }
+
+        fn get_amount_ranges(
+            &self,
+            _token_in: Bytes,
+            _token_out: Bytes,
+        ) -> Result<AmountRanges, SimulationError> {
+            Err(SimulationError::RecoverableError("not implemented".into()))
+        }
+
+        fn set_pending_overrides(&mut self, overrides: Arc<PendingOverrides>) {
+            self.pending_overrides = Some(overrides);
+        }
+
+        fn delta_transition(
+            &mut self,
+            _delta: ProtocolStateDelta,
+            _tokens: &HashMap<Bytes, Token>,
+            _balances: &Balances,
+        ) -> Result<(), TransitionError> {
+            Ok(())
+        }
+
+        fn clone_box(&self) -> Box<dyn HookHandler> {
+            Box::new(self.clone())
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn is_equal(&self, other: &dyn HookHandler) -> bool {
+            other
+                .as_any()
+                .downcast_ref::<Self>()
+                .is_some_and(|o| o.address == self.address)
+        }
+    }
+
+    /// A pool at price one with liquidity on both sides of the current tick.
+    fn hooked_pool(hook: &ConfigurableFeeHook) -> UniswapV4State {
+        let liquidity = 1_000_000_000_000_000_000u128;
+        let mut pool = UniswapV4State::new(
+            liquidity,
+            U256::from(1u8) << 96,
+            UniswapV4Fees { zero_for_one: 0, one_for_zero: 0, lp_fee: lp_fee::DYNAMIC_FEE_FLAG },
+            0,
+            60,
+            vec![
+                TickInfo::new(-60, liquidity as i128).unwrap(),
+                TickInfo::new(60, -(liquidity as i128)).unwrap(),
+            ],
+        )
+        .unwrap();
+        pool.set_hook_handler(Box::new(hook.clone()));
+        pool
+    }
+
+    fn pending_fee_update(hook: &ConfigurableFeeHook, fee_pips: u64) -> PendingOverrides {
+        PendingOverrides {
+            storage: Some(HashMap::from([(
+                hook.address,
+                HashMap::from([(U256::ZERO, U256::from(fee_pips))]),
+            )])),
+            native_balances: None,
+            block: None,
+        }
+    }
+
+    #[test]
+    fn test_pending_overrides_reach_both_hook_calls_and_change_the_quote() {
+        let hook = ConfigurableFeeHook::new();
+        let amount_in = BigUint::from(1_000_000u64);
+
+        let confirmed = hooked_pool(&hook)
+            .get_amount_out(amount_in.clone(), &token_x(), &token_y())
+            .unwrap();
+        let mut pool = hooked_pool(&hook);
+        pool.set_pending_overrides(Arc::new(pending_fee_update(&hook, 100_000)))
+            .unwrap();
+        let pending = pool
+            .get_amount_out(amount_in, &token_x(), &token_y())
+            .unwrap();
+
+        assert!(
+            pending.amount < confirmed.amount,
+            "a 10% fee the pending block wrote must cut the output: {} vs {}",
+            pending.amount,
+            confirmed.amount
+        );
+        let seen = hook.seen.lock().unwrap();
+        let calls: Vec<(&str, bool)> = seen
+            .iter()
+            .map(|(call, pending)| {
+                (
+                    *call,
+                    pending
+                        .as_ref()
+                        .is_some_and(|p| p.storage.is_some()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            calls,
+            vec![("before", false), ("after", false), ("before", true), ("after", true)],
+            "the confirmed quote runs both calls without overrides, the pending one with them"
+        );
+    }
+
+    #[test]
+    fn test_pending_overrides_survive_clone_box() {
+        let hook = ConfigurableFeeHook::new();
+        let mut pool = hooked_pool(&hook);
+        pool.set_pending_overrides(Arc::new(pending_fee_update(&hook, 1)))
+            .unwrap();
+
+        let cloned = pool.clone_box();
+        let cloned = cloned
+            .as_any()
+            .downcast_ref::<UniswapV4State>()
+            .unwrap();
+
+        assert!(cloned.pending_overrides().is_some(), "a clone quotes under the same overrides");
+    }
+
+    #[test]
+    fn test_set_pending_overrides_rejects_another_payload_type() {
+        let hook = ConfigurableFeeHook::new();
+        let mut pool = hooked_pool(&hook);
+
+        let result = pool.set_pending_overrides(Arc::new(0u8));
+
+        assert!(matches!(result, Err(SimulationError::FatalError(_))));
+        assert!(pool.pending_overrides().is_none(), "a rejected payload sets nothing");
+        assert!(hook.seen.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_pending_overrides_are_not_part_of_equality() {
+        let hook = ConfigurableFeeHook::new();
+        let confirmed = hooked_pool(&hook);
+        let mut pending = hooked_pool(&hook);
+        pending
+            .set_pending_overrides(Arc::new(pending_fee_update(&hook, 1)))
+            .unwrap();
+
+        assert!(confirmed == pending, "PartialEq ignores the overrides");
+        assert!(ProtocolSim::eq(&confirmed, &pending), "ProtocolSim::eq ignores the overrides");
+    }
+
     #[test]
     fn test_get_amount_out_no_hook() {
         // Test using transaction 0x78ea4bbb7d4405000f33fdf6f3fa08b5e557d50e5e7f826a79766d50bd643b6f
