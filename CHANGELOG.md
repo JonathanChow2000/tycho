@@ -1,3 +1,11 @@
+## [0.435.2](https://github.com/propeller-heads/tycho/compare/0.435.1...0.435.2) (2026-10-02)
+
+
+### Bug Fixes
+
+* **test:** fund Arc USDC sells through the native balance ([06873d6](https://github.com/propeller-heads/tycho/commit/06873d63ee47d41599b855fed2e6a5ad7ef0f8ba))
+* **test:** fund Arc USDC sells through the native balance ([#1527](https://github.com/propeller-heads/tycho/issues/1527)) ([696230e](https://github.com/propeller-heads/tycho/commit/696230e55f2e226ac6ac390b085593af266412ec))
+
 ## [0.435.1](https://github.com/propeller-heads/tycho/compare/0.435.0...0.435.1) (2026-10-02)
 
 
