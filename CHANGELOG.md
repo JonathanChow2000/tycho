@@ -1,3 +1,11 @@
+## [0.436.0](https://github.com/propeller-heads/tycho/compare/0.435.2...0.436.0) (2026-10-02)
+
+
+### Features
+
+* **execution:** log RFQ signed quotes against their price levels ([#1534](https://github.com/propeller-heads/tycho/issues/1534)) ([981523e](https://github.com/propeller-heads/tycho/commit/981523e73b45229203e25af1ef5fa76d4657ff7b))
+* **execution:** record RFQ signed quotes against their price levels ([18af244](https://github.com/propeller-heads/tycho/commit/18af244b36057d23ab18648c8d9029c68e89f29e))
+
 ## [0.435.2](https://github.com/propeller-heads/tycho/compare/0.435.1...0.435.2) (2026-10-02)
 
 
