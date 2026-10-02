@@ -1,3 +1,35 @@
+## [0.434.0](https://github.com/propeller-heads/tycho/compare/0.433.1...0.434.0) (2026-10-02)
+
+
+### Features
+
+* **indexer:** add the StateService interfaces ([f952079](https://github.com/propeller-heads/tycho/commit/f9520799df8c7010389da168ff3ffdcbadbab7da))
+* **indexer:** capture window changes per entity type ([0753ac3](https://github.com/propeller-heads/tycho/commit/0753ac3fc69bacc3e270cace64917141d929079d))
+* **indexer:** name every state cache fallback and register its series ([0a429b8](https://github.com/propeller-heads/tycho/commit/0a429b858854b4fb09b64a6782af0f82e8aea2da))
+* **indexer:** resolve every request version in DeltaWindow::resolve ([554e109](https://github.com/propeller-heads/tycho/commit/554e109cd33dfceee2c4bbbf33dbe2d7fb8ff2d0))
+* **indexer:** serve contract and protocol state from the entity cache ([#1513](https://github.com/propeller-heads/tycho/issues/1513)) ([06b2f15](https://github.com/propeller-heads/tycho/commit/06b2f15924a0d257d833a80e9916dd906804791f))
+* **indexer:** serve contract_state from the entity cache ([a1270f0](https://github.com/propeller-heads/tycho/commit/a1270f0047ec364cbc750eeac7c7f014859bf195))
+* **indexer:** serve protocol_state from the entity cache ([4b524ad](https://github.com/propeller-heads/tycho/commit/4b524ad1f37aed3cd64abe12f6c669c68abb79ca))
+* **indexer:** track the newest write of a cached account ([e661c64](https://github.com/propeller-heads/tycho/commit/e661c64947c0f689be2c80dccf7f7eadc31db012))
+
+
+### Bug Fixes
+
+* **indexer:** answer a block above the window tip like the database path ([0263f49](https://github.com/propeller-heads/tycho/commit/0263f49dc5bed7c0c52b6d0c0ef08281384bbfbb))
+* **indexer:** fall back to the database for an unknown protocol system ([618a085](https://github.com/propeller-heads/tycho/commit/618a085e690baa7305b55553152b3c730da24b4b))
+* **indexer:** keep the status of a failed component id lookup ([592c710](https://github.com/propeller-heads/tycho/commit/592c7106b55928d677567bc6214bd2a76cfad3da))
+* **indexer:** log a newer cached component at debug ([51e1594](https://github.com/propeller-heads/tycho/commit/51e159459a883037455c5517fc6136091f106a2d))
+* **indexer:** return a 500 when the protocol component id lookup fails ([c637621](https://github.com/propeller-heads/tycho/commit/c637621d603fe6c1440f137ad134deac04b21b10))
+* **indexer:** send state requests without ids to the database path ([2d46423](https://github.com/propeller-heads/tycho/commit/2d464237d1dacdbda3f61fbf08b9627f94dbb0fb))
+* **indexer:** serve each requested state id once per page ([2be9d39](https://github.com/propeller-heads/tycho/commit/2be9d394c19f4eedf148a4ee86dbb4efd35a0239))
+* **indexer:** skip folded blocks when serving component state ([6d5eedf](https://github.com/propeller-heads/tycho/commit/6d5eedfb558ec6ad9b796ca4460e5a633f26befd))
+
+
+### Performance Improvements
+
+* **indexer:** clone state window changes outside the window lock ([1ef6c65](https://github.com/propeller-heads/tycho/commit/1ef6c65815dea68753556b43885f6b6d6db36139))
+* **indexer:** copy only the Arc of cached accounts under the read lock ([89dbd3b](https://github.com/propeller-heads/tycho/commit/89dbd3b938accb8b51ea0f2f0c3f89c0f0b52baf))
+
 ## [0.433.1](https://github.com/propeller-heads/tycho/compare/0.433.0...0.433.1) (2026-10-01)
 
 
