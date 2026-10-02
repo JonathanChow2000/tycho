@@ -1,3 +1,19 @@
+## [0.433.1](https://github.com/propeller-heads/tycho/compare/0.433.0...0.433.1) (2026-10-01)
+
+
+### Bug Fixes
+
+* **test:** bump alloy-chains to 0.2.39 for Arc mainnet ([7631fb0](https://github.com/propeller-heads/tycho/commit/7631fb0a8967d1faf956c92f7ae897881b5cab07))
+* **test:** bump alloy-chains to 0.2.39 for Arc mainnet ([#1526](https://github.com/propeller-heads/tycho/issues/1526)) ([afd884c](https://github.com/propeller-heads/tycho/commit/afd884c2775756edcefff1bf088ac89b98773af1))
+
+## [0.433.0](https://github.com/propeller-heads/tycho/compare/0.432.0...0.433.0) (2026-10-01)
+
+
+### Features
+
+* **execution:** deploy TychoRouterV3 to Arc ([0a4f1c0](https://github.com/propeller-heads/tycho/commit/0a4f1c0e2ef040f79c2f75182e5d44a94e751495))
+* **execution:** deploy TychoRouterV3 to Arc ([#1507](https://github.com/propeller-heads/tycho/issues/1507)) ([acd68ee](https://github.com/propeller-heads/tycho/commit/acd68eef6ffdaf244761e0ddc7f3f705c0cdd9bc))
+
 ## [0.432.0](https://github.com/propeller-heads/tycho/compare/0.431.0...0.432.0) (2026-10-01)
 
 
