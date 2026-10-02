@@ -4,7 +4,7 @@
 
 ![Tycho](./assets/tycho.png)
 
-Tycho is an open-source interface to on-chain liquidity.
+Tycho is a source-available interface to on-chain liquidity.
 
 For comprehensive documentation about Tycho, visit our [GitBook](https://docs.propellerheads.xyz/tycho/overview).
 
