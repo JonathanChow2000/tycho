@@ -311,6 +311,7 @@ pub(crate) fn record_signed_quote_deviation(
     };
     let deviation_bps = deviation_bps(&level_amount_out, &signed_quote.amount_out);
     debug!(
+        target: "rfq_signed_quote",
         protocol = %component.protocol_system,
         component_id = %component.id,
         token_in = %swap.token_in().address,
