@@ -350,6 +350,7 @@ contract TychoRouterTestSetup is
         if (block.chainid == 8453) return NATIVE_ROUTER_V6_BASE;
         if (block.chainid == 42161) return NATIVE_ROUTER_V6_ARBITRUM;
         if (block.chainid == 56) return NATIVE_ROUTER_V6_BSC;
+        if (block.chainid == 4663) return NATIVE_ROUTER_V6_ROBINHOOD;
         return address(0);
     }
 
